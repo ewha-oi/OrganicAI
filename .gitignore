@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 프로젝트 데이터 (Google Drive에 별도 저장, git에는 올리지 X)
+data/
+
+# VS Code 로컬 설정
+.vscode/
+
+# 실험용 임시 파일
+configs/*.local.json
