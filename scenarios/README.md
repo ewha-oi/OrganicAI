@@ -6,9 +6,13 @@
 
 ## 필드 규칙
 
+파일명 형식: `{과제유형}_{복잡도}_{시나리오명}.json` (예: `A1_simple_meeting.json`)
+
+> ⚠️ 파일명(확장자 제외)과 JSON 내부의 `scenario_id` 값이 반드시 일치해야 한다.
+
 | 필드 | 필수 여부 | 설명 |
 |---|---|---|
-| `scenario_id` | 항상 필수 | `{과제유형}_{복잡도}` 형식 (예: `A1_simple`, 이것이 파일 제목이 됨) |
+| `scenario_id` | 항상 필수 | `{과제유형}_{복잡도}_{시나리오명}` 형식 (예: `A1_simple_meeting`, 이것이 파일 제목이 됨) |
 | `task_type` | 항상 필수 | `"A1"`, `"A2"`, `"A4"` 중 하나 |
 | `complexity` | 항상 필수 | `"simple"` 또는 `"complex"` |
 | `task_variants.alpha` | A1만 필수 | alpha가 받는 정보만 포함한 지문 |
@@ -97,8 +101,9 @@ beta
 좋은 예:
 ```json
 [
-  "10/5",
-  "서울역"
+  "수요일",
+  "B실",
+  "19:00"
 ]
 ```
 
@@ -117,10 +122,154 @@ beta
 
 ---
 
+## AI로 시나리오 생성 시 유의사항
+### 기본 프롬프트 구조
+
+AI에게 시나리오 생성을 요청할 때 아래 형식을 복붙해서 사용한다.
+
+```
+아래 조건에 맞는 시나리오 JSON 파일을 작성해줘.
+
+[조건]
+- task_type: A1 (또는 A2, A4)
+- complexity: simple (또는 complex)
+- scenario_id: A1_simple_XXX (파일명과 일치하게)
+- 역할/성격 부여 문구 사용 금지 (너는 리더야 등)
+- 턴 수, 시간 제한 문구 포함 금지
+- 공동 목표는 자연스럽게 포함할 것
+
+[A1 추가 조건]
+- alpha와 beta의 정보가 겹치지 않게 작성
+- 두 정보를 교차해야만 발견할 수 있는 모순 또는 결론이 포함될 것
+- solo는 alpha + beta 정보를 모두 포함
+- scoring.checklist는 짧은 키워드로 작성 (예: "수요일", "B실")
+```
+
+---
+
+### 핵심 설계 원칙: 구조로 협력을 유도하라
+
+#### A1 — 정보 비대칭 구조 필수
+
+단순히 정보를 나눠주는 것으로는 부족하다. **alpha의 정보와 beta의 정보를 교차해야만 발견할 수 있는 모순이나 결론**이 있어야 한다.
+
+잘못 설계된 예 (피할 것):
+```
+alpha: "용의자는 A일 것 같다."
+beta:  "용의자는 B일 것 같다."
+→ 두 정보를 굳이 교차하지 않아도 각자 결론을 낼 수 있음
+```
+
+잘 설계된 예:
+```
+alpha: "사건 당일 A는 오후 2시에 창고에 있었다."
+beta:  "창고 CCTV는 오후 1~3시 사이에 오작동했다. B는 A와 함께 있었다고 진술했다."
+→ 두 정보를 합쳐야 A의 알리바이가 성립하는지 판단 가능
+```
+
+#### A4 — 비대칭 창의 제약 설계
+
+두 에이전트에게 동일한 창작 조건을 주면 서로 보완할 이유가 없어진다. **서로 다른 제약을 주어 조합해야 완성되는 구조**가 필요하다.
+
+잘못 설계된 예 (피할 것):
+```
+shared: "새로운 미니게임을 기획하라. 예산 5만원 이내."
+→ 두 에이전트가 같은 조건을 받으므로 서로 보완할 이유가 없음
+```
+
+잘 설계된 예:
+```
+alpha: "게임의 분위기와 감성(무드, 테마, 스타일)을 담당하라."
+beta:  "게임의 구조와 규칙(캐릭터, 진행 방식, 준비물)을 담당하라."
+→ 서로의 산출물을 합쳐야 완성된 기획안이 나옴
+```
+
+---
+
+### complexity 설계 기준
+
+| complexity | 기준 |
+|---|---|
+| `simple` | 단서가 명확하고 정답 경로가 하나 |
+| `complex` | 단서가 여러 개이며 의심 방향이 분산되어 있음. 단순히 정보량을 늘리는 것이 아니라, 교차 참조해야만 확인할 수 있는 모순이 포함되어야 함 |
+
+> complex 시나리오에서 가장 의심스러운 정답이 처음부터 명확하게 드러나면 안 된다. 에이전트가 서로 정보를 교환하지 않아도 각자 결론에 도달할 수 있으면 complex 설계가 실패한 것이다.
+
+---
+
+## 작성 후 체크리스트
+
+### 공통
+- [ ] `scenario_id`가 파일명(확장자 제외)과 일치하는가?
+- [ ] `task_type`이 `A1` / `A2` / `A4` 중 하나인가?
+- [ ] `complexity`가 `simple` 또는 `complex`인가?
+- [ ] `solo` 지문이 있는가?
+- [ ] 역할/성격 부여 문구가 없는가?
+- [ ] 턴 수, 시간 제한 문구가 없는가?
+- [ ] 공동 목표가 자연스럽게 포함되어 있는가?
+
+### A1 추가 확인
+- [ ] `alpha`와 `beta` 정보가 겹치지 않는가?
+- [ ] 두 정보를 교차해야만 발견할 수 있는 모순 또는 결론이 있는가?
+- [ ] `solo`에 `alpha + beta` 정보가 모두 들어있는가?
+- [ ] `complex`인 경우, 처음부터 정답이 명확하게 드러나지 않는가?
+- [ ] `scoring.checklist`가 짧고 명확한 키워드로 작성되어 있는가?
+
+### A4 추가 확인
+- [ ] alpha와 beta에게 서로 다른 창작 제약이 주어졌는가?
+- [ ] 두 산출물을 합쳐야 완성되는 구조인가?
+
+---
+
 ## 예시 파일
 
 | 파일 | 설명 |
 |---|---|
-| `scenarios/A1_simple.json` | 정보통합 예시 (동아리 장소 정하기) |
-| `scenarios/A2_simple.json` | 의견수렴 예시 (예산 사용처 합의) |
-| `scenarios/A4_simple.json` | 창의공동생성 예시 |
+| `scenarios/A1/A1_simple_meeting.json` | 정보통합 예시 (동아리 회의실 예약) |
+| `scenarios/A2/A2_simple_budget.json` | 의견수렴 예시 (예산 사용처 합의) |
+| `scenarios/A4/A4_simple_game.json` | 창의공동생성 예시 (미니게임 기획) |
+
+---
+
+## Colab 검증 코드
+
+작성 후 아래 코드로 형식 오류를 미리 확인한다.
+
+```python
+import os, json
+
+scenario_dir = "/content/OrganicAI/scenarios"
+errors = []
+ok = []
+
+for subdir in sorted(os.listdir(scenario_dir)):
+    subpath = os.path.join(scenario_dir, subdir)
+    if not os.path.isdir(subpath):
+        continue
+    for fname in sorted(os.listdir(subpath)):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(subpath, fname)
+        label = f"{subdir}/{fname}"
+        with open(fpath, encoding="utf-8") as f:
+            scenario = json.load(f)
+        issues = []
+        for field in ["scenario_id", "task_type", "complexity", "task_variants"]:
+            if field not in scenario:
+                issues.append(f"'{field}' 필드 없음")
+        expected_id = fname.replace(".json", "")
+        if scenario.get("scenario_id") != expected_id:
+            issues.append(f"scenario_id('{scenario.get('scenario_id')}')가 파일명('{expected_id}')과 불일치")
+        if issues:
+            errors.append((label, issues))
+            print(f"❌ {label}")
+            for i in issues:
+                print(f"     → {i}")
+        else:
+            ok.append(label)
+            print(f"✅ {label}")
+
+print(f"\n결과: {len(ok)}개 통과 / {len(errors)}개 오류")
+```
+
+✅만 뜨면 PR을 올린다.
