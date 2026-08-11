@@ -55,7 +55,7 @@ import json
 from pathlib import Path
 
 from .agents import group_output_text, run_dyad, run_solo
-from .classify import classify_log, format_result
+from .classify import classify_log, format_result, min_turns_for_bidirectional
 from .llm import judge_key_name, judge_model, judge_provider
 from .scoring import attach_scores, detect_new_idea, score_a1, score_a2_a4
 from .tagging import tag_log
@@ -226,6 +226,21 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
 
     if verbose:
         step(f"judge = {judge_provider()}:{judge_model()}")
+
+    # 0) 설정 점검 — 비싼 호출을 시작하기 전에 알려야 의미가 있다.
+    #    턴 수가 모자라면 Q2는 대화 내용과 무관하게 실패하고, 그 L0/L1은
+    #    '협력이 없었다'는 결과와 겉모습이 같아 구별되지 않는다.
+    min_turns = min_turns_for_bidirectional(thresholds)
+    if max_turns < min_turns:
+        print(
+            f"\n{'!' * 62}\n"
+            f"설정 경고: max_turns={max_turns}에서는 Q2가 통과할 수 없다\n"
+            f"  한 화자의 참조 가능 횟수 최대 {max(0, -(-max_turns // 2) - 1)}회 "
+            f"< bidirectional_min={thresholds['bidirectional_min']}\n"
+            f"  판정은 반드시 L0 또는 L1이 된다 (협력의 부재가 아니라 턴 수 부족).\n"
+            f"  파일럿이라도 max_turns를 {min_turns} 이상으로 둘 것.\n"
+            f"{'!' * 62}\n"
+        )
 
     # 1) 단독 조건
     if solo_outputs is None:

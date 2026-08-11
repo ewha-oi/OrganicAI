@@ -122,6 +122,45 @@ def classify(features: dict, task_type: str, thresholds: dict = THRESHOLDS) -> d
     )
 
 
+def min_turns_for_bidirectional(thresholds: dict = THRESHOLDS) -> int:
+    """
+    Q2가 통과 '가능'해지는 최소 max_turns.
+
+    화자는 번갈아 말하므로 한 화자의 발화는 전체의 절반이고, 그중 대화의 첫 발화는
+    참조할 대상이 없다(tagging에서 맥락이 '(없음)'이 된다). 따라서 한 화자가 낼 수
+    있는 참조는 최대 ceil(max_turns/2) - 1회다. 이것이 bidirectional_min보다 작으면
+    Q2는 협력의 정도와 무관하게 **반드시** 실패한다.
+    """
+    return 2 * thresholds["bidirectional_min"] + 1
+
+
+def _reference_ceiling(turns: list, speaker: str) -> int:
+    """이 화자가 이 로그에서 낼 수 있었던 참조의 최대 횟수 (첫 발화는 제외)."""
+    return sum(1 for i, t in enumerate(turns) if t["speaker"] == speaker and i > 0)
+
+
+def config_warnings(log: dict, features: dict, thresholds: dict = THRESHOLDS) -> list:
+    """
+    판정 결과를 그대로 해석하면 안 되는 설정상의 문제를 찾는다.
+
+    턴 수가 모자라면 Q2는 대화 내용과 무관하게 실패하는데, 그 결과가 L0/L1이라
+    '협력이 없었다'는 실험 결과와 겉모습이 완전히 같다. 조용히 지나가면
+    파일럿 전체를 잘못 해석하게 되므로 리포트 맨 앞에 띄운다.
+    """
+    found = []
+    bmin = thresholds["bidirectional_min"]
+    for speaker in (features["speaker_a"], features["speaker_b"]):
+        ceiling = _reference_ceiling(log["turns"], speaker)
+        if ceiling < bmin:
+            found.append(
+                f"{speaker}의 참조 가능 횟수는 최대 {ceiling}회인데 "
+                f"bidirectional_min={bmin}이다 — 이 설정에서 Q2는 통과할 수 없다. "
+                f"L0/L1이 나와도 협력의 부재가 아니라 턴 수 부족의 산물이다. "
+                f"max_turns를 {min_turns_for_bidirectional(thresholds)} 이상으로 올릴 것"
+            )
+    return found
+
+
 def _result(level: str, reason: str, checks: dict, stopped_at) -> dict:
     return {
         "level": level,
@@ -143,14 +182,28 @@ def classify_log(log: dict, thresholds: dict = THRESHOLDS) -> dict:
         "condition": log.get("condition"),
         "replicate": log.get("replicate"),
         "features": features,
+        # 저장된 로그를 다시 판정할 때(classify_saved_dir)도 매번 다시 계산되므로
+        # 이 경고는 유실되지 않는다.
+        "config_warnings": config_warnings(log, features, thresholds),
         **result,
     }
 
 
 def format_result(result: dict) -> str:
     """판정 결과를 사람이 읽는 리포트 문자열로 만든다 (Colab에서 print용)."""
+    warnings = result.get("config_warnings") or []
+
+    # 경고는 리포트의 맨 앞과 맨 뒤에 모두 찍는다. 판정 줄만 보고 넘어가거나
+    # 출력이 길어 위쪽이 잘려도 눈에 걸리게 하기 위한 것이다.
+    banner = []
+    if warnings:
+        banner.append("!!! 설정 경고 — 이 판정을 그대로 해석하지 말 것 !!!")
+        banner.extend(f"  - {w}" for w in warnings)
+
     lines = [
         "=" * 62,
+        *banner,
+        *(["-" * 62] if banner else []),
         f"시나리오 : {result.get('scenario_id')} ({result.get('task_type')})",
         f"조건     : {result.get('condition')} / rep {result.get('replicate')}",
         f"판정     : {result['level']} — {result['meaning']}",
@@ -164,5 +217,8 @@ def format_result(result: dict) -> str:
         lines.append(f"       기준: {check['criterion']}")
     if result.get("stopped_at"):
         lines.append(f"\n병목: {result['stopped_at']} 에서 판정이 멈춤")
+    if banner:
+        lines.append("-" * 62)
+        lines.extend(banner)
     lines.append("=" * 62)
     return "\n".join(lines)
