@@ -31,14 +31,20 @@ class LogValidationError(Exception):
     """로그가 포맷 스펙을 위반했을 때 발생시키는 예외."""
 
 
-def validate_log(log: dict) -> None:
+def validate_log(log: dict, require_tags: bool = True) -> None:
     """
     로그가 포맷 스펙을 따르는지 검사한다.
     문제가 있으면 LogValidationError를 발생시키고, 통과하면 아무것도 반환하지 않는다.
+
+    require_tags=True (기본):
+        모든 turn에 codes와 ref 키가 실제로 존재해야 한다.
+        이 검사가 없으면 태깅을 건너뛴 로그가 에러 없이 전부 L0으로 판정되는데,
+        이는 "협력이 전혀 없었다"는 실험 결과와 구별되지 않아 가장 위험하다.
+        태깅 전 원본(raw) 로그를 형식만 확인하고 싶을 때만 False를 준다.
     """
     _check_top_fields(log)
     _check_task_type_fields(log)
-    _check_turns(log["turns"])
+    _check_turns(log["turns"], require_tags=require_tags)
 
 
 def _check_top_fields(log: dict) -> None:
@@ -78,23 +84,47 @@ def _check_task_type_fields(log: dict) -> None:
             raise LogValidationError(f"task_type='{task_type}'인 로그는 group_grade가 필요함")
 
 
-def _check_turns(turns: list) -> None:
+def _check_turns(turns: list, require_tags: bool = True) -> None:
     if len(turns) == 0:
         raise LogValidationError("turns가 비어 있음")
 
-    speakers = set()
+    speakers = {t["speaker"] for t in turns if isinstance(t, dict) and "speaker" in t}
+
     for i, t in enumerate(turns):
         for field, expected_type in REQUIRED_TURN_FIELDS.items():
             if field not in t:
                 raise LogValidationError(f"turns[{i}]에 필수 필드 '{field}' 없음")
             if not isinstance(t[field], expected_type):
                 raise LogValidationError(f"turns[{i}]의 '{field}' 타입 오류")
-        speakers.add(t["speaker"])
+
+        if require_tags:
+            if "codes" not in t:
+                raise LogValidationError(
+                    f"turns[{i}]에 'codes' 없음 — 태깅(tag_log)을 먼저 실행할 것"
+                )
+            if "ref" not in t:
+                raise LogValidationError(
+                    f"turns[{i}]에 'ref' 없음 — 태깅(tag_log)을 먼저 실행할 것"
+                )
+
+        if not isinstance(t.get("codes", []), list):
+            raise LogValidationError(f"turns[{i}]의 'codes'는 리스트여야 함")
 
         for c in t.get("codes", []):
             if c not in VALID_CODES:
                 raise LogValidationError(
                     f"turns[{i}]에 알 수 없는 코드 '{c}' (허용: {VALID_CODES})"
+                )
+
+        ref = t.get("ref")
+        if ref is not None:
+            if ref == t["speaker"]:
+                raise LogValidationError(
+                    f"turns[{i}]의 ref가 자기 자신('{ref}') — ref는 상대 화자여야 함"
+                )
+            if ref not in speakers:
+                raise LogValidationError(
+                    f"turns[{i}]의 ref '{ref}'가 화자 목록 {sorted(speakers)}에 없음"
                 )
 
     if len(speakers) != 2:
