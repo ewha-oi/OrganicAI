@@ -13,7 +13,7 @@ validate_log()를 통과할 수 있는 완전한 로그가 된다.
 
 import time
 
-from .llm import MODELS, with_retry
+from .llm import MODELS, LLMCallError, with_retry
 
 # google-generativeai / groq SDK는 실제로 API를 호출할 때만 필요하다.
 # 시나리오 형식 점검(runner.check_scenario_dir)처럼 SDK 없이 돌려야 하는 작업이
@@ -56,10 +56,27 @@ class ScenarioError(ValueError):
 # ---------------------------------------------------------------------------
 # 저수준 호출
 # ---------------------------------------------------------------------------
+def _require_text(raw, what: str) -> str:
+    """
+    생성 결과가 비어 있으면 즉시 실패시킨다.
+
+    빈 발화를 그대로 로그에 남기면 '한쪽이 한 마디도 안 했다'가 되는데,
+    이는 '대화가 겉돌았다'는 **실험 결과**와 구별되지 않는다 (그대로 L0/L1이 된다).
+    추론 모델이 max_tokens를 추론 토큰에 다 쓰면 실제로 이런 응답이 나온다.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise LLMCallError(
+            f"{what}이 빈 응답을 반환했다 — 추론 모델이면 max_tokens가 추론에 "
+            f"모두 소모됐을 수 있다. 빈 발화는 로그에 남기지 않는다"
+        )
+    return text
+
+
 def _call_gemini(model, prompt: str) -> str:
     def _once():
         response = model.generate_content(prompt)
-        return response.text.strip()
+        return _require_text(response.text, f"alpha({MODELS['alpha']})")
     return with_retry(_once, what="gemini 호출")
 
 
@@ -70,7 +87,8 @@ def _call_llama(client, prompt: str, model_id: str = None) -> str:
             messages=[{"role": "user", "content": prompt}],
             temperature=TEMPERATURE,
         )
-        return response.choices[0].message.content.strip()
+        return _require_text(response.choices[0].message.content,
+                             f"beta({model_id or MODELS['beta']})")
     return with_retry(_once, what="llama 호출")
 
 

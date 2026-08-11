@@ -97,6 +97,14 @@ def _check_turns(turns: list, require_tags: bool = True) -> None:
             if not isinstance(t[field], expected_type):
                 raise LogValidationError(f"turns[{i}]의 '{field}' 타입 오류")
 
+        # 빈 발화는 생성 실패다. 그대로 통과시키면 '한쪽이 한 마디도 안 했다'가
+        # '대화가 겉돌았다'는 실험 결과로 둔갑해 L0/L1이 조용히 나온다.
+        if not t["text"].strip():
+            raise LogValidationError(
+                f"turns[{i}]({t['speaker']})의 text가 비어 있음 — 생성이 실패한 "
+                f"발화다. 이 로그로는 판정할 수 없다"
+            )
+
         if require_tags:
             if "codes" not in t:
                 raise LogValidationError(
