@@ -14,16 +14,12 @@ A2/A4(의견수렴/창의생성): LLM-judge 등급 평가(1~5점, 블라인드)
 import re
 import unicodedata
 
-from .llm import MODELS, call_judge_json
+from .llm import call_judge_json, make_judge
 
-# anthropic SDK는 judge를 실제로 호출할 때만 필요하다.
+# judge SDK(anthropic/groq/google-generativeai)는 실제로 호출할 때만 필요하다.
 # A1 채점(score_a1)과 정규화는 API 호출이 없으므로, SDK가 설치되지 않은
 # 환경에서도 이 모듈을 임포트하고 테스트할 수 있어야 한다.
-
-
-def _anthropic_client(api_key: str):
-    import anthropic  # noqa: PLC0415 - 의도적인 지연 임포트
-    return anthropic.Anthropic(api_key=api_key)
+# 어느 제공사를 쓸지는 llm.JUDGE_PROVIDER(=COOP_JUDGE_PROVIDER)가 정한다.
 
 # ---------------------------------------------------------------------------
 # A1: 체크리스트 기반 결정론 채점
@@ -141,23 +137,25 @@ JUDGE_RUBRIC = """당신은 과제 산출물의 품질을 평가하는 채점자
 """
 
 
-def score_a2_a4(output_text: str, api_key: str, model: str = None) -> int:
+def score_a2_a4(output_text: str, api_key: str, model: str = None,
+                provider: str = None) -> int:
     """
     LLM-judge로 1~5점 등급 산출.
     블라인드: 단독/그룹 여부를 프롬프트에 노출하지 않고, 화자 표기도 제거한다.
     """
-    return score_a2_a4_detail(output_text, api_key, model=model)["grade"]
+    return score_a2_a4_detail(output_text, api_key, model=model,
+                              provider=provider)["grade"]
 
 
-def score_a2_a4_detail(output_text: str, api_key: str, model: str = None) -> dict:
+def score_a2_a4_detail(output_text: str, api_key: str, model: str = None,
+                       provider: str = None) -> dict:
     """score_a2_a4와 동일하되 judge가 쓴 근거(reason)까지 반환한다."""
-    client = _anthropic_client(api_key)
+    client = make_judge(api_key, provider=provider, model=model)
     parsed = call_judge_json(
         client,
         system=JUDGE_RUBRIC,
         user=f"산출물:\n{anonymize_output(output_text)}",
         max_tokens=300,
-        model=model or MODELS["judge"],
     )
     grade = int(parsed["grade"])
     if not 1 <= grade <= 5:
@@ -185,16 +183,16 @@ B에 A 중 어느 것에도 없던 해결책 요소가 포함되어 있습니까
 
 
 def detect_new_idea(solo_outputs: list, group_output: str, api_key: str,
-                    model: str = None) -> bool:
+                    model: str = None, provider: str = None) -> bool:
     """단독 산출물들에 없던 새로운 해결책이 그룹 산출물에 있는지 LLM-judge로 판정."""
     return detect_new_idea_detail(solo_outputs, group_output, api_key,
-                                  model=model)["new_idea"]
+                                  model=model, provider=provider)["new_idea"]
 
 
 def detect_new_idea_detail(solo_outputs: list, group_output: str, api_key: str,
-                           model: str = None) -> dict:
+                           model: str = None, provider: str = None) -> dict:
     """detect_new_idea와 동일하되 judge가 쓴 근거까지 반환한다."""
-    client = _anthropic_client(api_key)
+    client = make_judge(api_key, provider=provider, model=model)
     solo_text = "\n---\n".join(anonymize_output(o) for o in solo_outputs)
     prompt = (
         f"(A) 단독 산출물들:\n{solo_text}\n\n"
@@ -205,7 +203,6 @@ def detect_new_idea_detail(solo_outputs: list, group_output: str, api_key: str,
         system=NEW_IDEA_PROMPT,
         user=prompt,
         max_tokens=300,
-        model=model or MODELS["judge"],
     )
     return {"new_idea": bool(parsed["new_idea"]), "reason": parsed.get("reason", "")}
 

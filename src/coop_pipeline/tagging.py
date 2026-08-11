@@ -15,7 +15,7 @@ LLM 발화 태깅
       Colab에서는 Secrets 기능으로 등록해서 불러올 것.
 """
 
-from .llm import MODELS, call_judge_json
+from .llm import call_judge_json, make_judge
 from .validate_log import VALID_CODES
 
 CODING_MANUAL = """당신은 두 참여자(alpha, beta)의 대화 로그에서 각 발화의 기능을 분류하는 코더입니다.
@@ -57,7 +57,7 @@ CODING_MANUAL = """당신은 두 참여자(alpha, beta)의 대화 로그에서 �
 
 
 def tag_turn(client, prev_turns: list, current_turn: dict,
-             model: str = None) -> dict:
+             model: str = None) -> dict:  # client: llm.JudgeClient
     """
     발화 하나를 태깅한다.
     prev_turns : 직전 문맥 (기본 2턴 = 자기 직전 발화 + 상대 직전 발화)
@@ -75,7 +75,7 @@ def tag_turn(client, prev_turns: list, current_turn: dict,
         system=CODING_MANUAL,
         user=prompt,
         max_tokens=500,
-        model=model or MODELS["judge"],
+        model=model,
     )
 
     codes = [c for c in parsed.get("codes", []) if c in VALID_CODES]
@@ -95,19 +95,20 @@ def tag_turn(client, prev_turns: list, current_turn: dict,
 
 
 def tag_log(log: dict, api_key: str, context_window: int = 2,
-            model: str = None) -> dict:
+            model: str = None, provider: str = None) -> dict:
     """
     로그 전체(turns)를 순회하며 각 turn에 codes, ref, evidence를 채워넣는다.
     log를 복사하지 않고 그 자리에서 수정 후 반환한다.
+
+    api_key  : judge 제공사의 키. 어느 제공사인지는 COOP_JUDGE_PROVIDER가 정한다
+               (기본 anthropic). provider 인자로 직접 지정할 수도 있다.
 
     한계: context_window=2는 '자기 직전 발화 + 상대 직전 발화'만 본다.
           여러 턴 전에 나온 제안을 뒤늦게 반영하는 경우는 참조로 잡히지 않는다.
           이 값을 바꾸면 dir_AB / dir_BA가 달라지므로, 파일럿과 본실험에서
           같은 값을 써야 한다 (달라지면 임계값 캘리브레이션이 무효가 된다).
     """
-    import anthropic  # noqa: PLC0415 - judge를 실제 호출할 때만 필요한 지연 임포트
-
-    client = anthropic.Anthropic(api_key=api_key)
+    client = make_judge(api_key, provider=provider, model=model)
     turns = log["turns"]
 
     for i, turn in enumerate(turns):
@@ -117,8 +118,11 @@ def tag_log(log: dict, api_key: str, context_window: int = 2,
         turn["ref"] = tag_result["ref"]
         turn["evidence"] = tag_result["evidence"]
 
+    # 어느 제공사·모델로 태깅했는지 로그에 남긴다.
+    # 파일럿과 본실험의 judge가 달라지면 Kappa 비교가 무효가 되므로 기록이 필요하다.
     log["tagging"] = {
-        "model": model or MODELS["judge"],
+        "provider": client.provider,
+        "model": client.model,
         "context_window": context_window,
         "manual_version": "v2",
     }

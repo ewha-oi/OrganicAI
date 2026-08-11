@@ -22,6 +22,68 @@ import os
 import re
 import time
 
+
+class LLMCallError(RuntimeError):
+    """LLM 호출이 재시도 후에도 실패했거나, 응답을 JSON으로 해석할 수 없을 때."""
+
+
+# ---------------------------------------------------------------------------
+# judge 제공사 선택
+# ---------------------------------------------------------------------------
+# judge(태깅 + 채점)는 세 제공사 중 하나로 돌릴 수 있다.
+#     anthropic : 유료. 기본값.
+#     groq      : 무료 티어. 비용 0으로 파일럿을 돌릴 때.
+#     gemini    : 무료 티어. **주의 — 아래 편향 경고를 읽을 것.**
+#
+# 환경변수로 바꾼다 (임포트 전에 설정해야 반영된다):
+#     os.environ["COOP_JUDGE_PROVIDER"] = "groq"
+#     os.environ["COOP_JUDGE_MODEL"]    = "openai/gpt-oss-120b"
+#
+# ── self-preference 편향 경고 ──────────────────────────────────────────────
+# judge는 **생성 모델과 다른 계열**이어야 한다. 지금 설계에서 alpha=Gemini가
+# 최종 그룹 산출물을 작성하므로(agents.FINALIZE_PROMPT), judge까지 Gemini면
+# 자기 계열의 글을 자기가 채점하게 된다. group_grade가 부풀고 -> Q3 통과율이
+# 오르고 -> L3/L4가 실제보다 많이 나온다. 그게 이 연구의 핵심 결과라서
+# 편향이 결론을 그대로 오염시킨다.
+#
+# 무료로 가려면 judge를 Groq의 **Llama가 아닌** 계열에 두는 것이 안전하다
+# (beta=Llama이므로 Llama도 피해야 한다). 즉 judge != alpha 계열 != beta 계열.
+# ---------------------------------------------------------------------------
+VALID_JUDGE_PROVIDERS = ("anthropic", "groq", "gemini")
+
+JUDGE_PROVIDER = os.environ.get("COOP_JUDGE_PROVIDER", "anthropic").strip().lower()
+
+# 제공사별 judge 기본 모델. COOP_JUDGE_MODEL이 있으면 그것이 우선한다.
+DEFAULT_JUDGE_MODELS = {
+    "anthropic": "claude-sonnet-5",
+    "groq": "openai/gpt-oss-120b",      # Llama가 아닌 계열 (beta와 겹치지 않게)
+    "gemini": "gemini-2.5-flash",       # alpha와 같은 계열 - 편향 주의
+}
+
+# api_keys 딕셔너리에서 judge가 꺼내 쓸 키 이름
+JUDGE_KEY_NAME = {"anthropic": "anthropic", "groq": "groq", "gemini": "gemini"}
+
+
+def judge_provider(provider: str = None) -> str:
+    """judge 제공사 이름을 확정한다. 알 수 없는 값이면 바로 에러."""
+    name = (provider or JUDGE_PROVIDER).strip().lower()
+    if name not in VALID_JUDGE_PROVIDERS:
+        raise LLMCallError(
+            f"COOP_JUDGE_PROVIDER는 {VALID_JUDGE_PROVIDERS} 중 하나여야 함: '{name}'"
+        )
+    return name
+
+
+def judge_model(provider: str = None) -> str:
+    """해당 제공사에서 쓸 judge 모델 ID."""
+    return os.environ.get("COOP_JUDGE_MODEL") or DEFAULT_JUDGE_MODELS[judge_provider(provider)]
+
+
+def judge_key_name(provider: str = None) -> str:
+    """api_keys 딕셔너리에서 judge가 꺼내 쓸 키 이름 ('anthropic'/'groq'/'gemini')."""
+    return JUDGE_KEY_NAME[judge_provider(provider)]
+
+
 # ---------------------------------------------------------------------------
 # 모델 ID (여기 한 곳에서만 관리)
 # ---------------------------------------------------------------------------
@@ -29,7 +91,7 @@ import time
 #       docs/PIPELINE.md의 "모델 ID 확인" 절차를 한 번 돌려볼 것.
 MODELS = {
     # 판정자(judge): 태깅 + 채점. 생성 모델과 다른 계열이어야 self-preference 편향이 없다.
-    "judge": os.environ.get("COOP_JUDGE_MODEL", "claude-sonnet-5"),
+    "judge": judge_model(),
     # alpha 역할 생성 모델 (Google)
     "alpha": os.environ.get("COOP_ALPHA_MODEL", "gemini-2.5-flash"),
     # beta 역할 생성 모델 (Groq)
@@ -38,10 +100,6 @@ MODELS = {
 
 MAX_RETRIES = 3
 RETRY_BASE_SLEEP = 2.0  # 초. 재시도마다 배수로 늘어난다.
-
-
-class LLMCallError(RuntimeError):
-    """LLM 호출이 재시도 후에도 실패했거나, 응답을 JSON으로 해석할 수 없을 때."""
 
 
 # ---------------------------------------------------------------------------
@@ -91,23 +149,108 @@ def with_retry(fn, what: str = "LLM 호출"):
 
 
 # ---------------------------------------------------------------------------
-# judge 호출 (Anthropic)
+# judge 호출 (제공사 무관)
 # ---------------------------------------------------------------------------
-def call_judge_json(client, system: str, user: str, max_tokens: int = 400,
-                    model: str = None) -> dict:
+# tagging.py / scoring.py는 아래 JudgeClient만 쓴다. 제공사별 차이(SDK 인터페이스,
+# system 프롬프트 전달 방식, JSON 강제 옵션)는 전부 이 파일 안에 가둔다.
+# temperature=0 고정 — 채점은 재현 가능해야 한다.
+
+# Gemini 2.5 계열은 추론 토큰이 출력 한도를 같이 소모한다. 태깅 프롬프트 기준
+# max_tokens=500을 그대로 주면 JSON이 중간에 잘려 파싱이 실패한다.
+_GEMINI_MIN_OUTPUT_TOKENS = 4096
+
+
+class JudgeClient:
     """
-    judge 모델을 호출해 JSON 딕셔너리를 받는다.
-    temperature=0 고정 — 채점은 재현 가능해야 한다.
+    judge 제공사 하나를 감싼 얇은 어댑터.
+
+        judge = make_judge(api_key)          # 제공사는 COOP_JUDGE_PROVIDER를 따름
+        parsed = judge.json(system, user)    # dict를 돌려준다
     """
 
-    def _once():
-        response = client.messages.create(
-            model=model or MODELS["judge"],
-            max_tokens=max_tokens,
-            temperature=0,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+    def __init__(self, provider: str, client, model: str):
+        self.provider = provider
+        self.client = client
+        self.model = model
+
+    def __repr__(self):
+        return f"<JudgeClient {self.provider}:{self.model}>"
+
+    def json(self, system: str, user: str, max_tokens: int = 400,
+             model: str = None) -> dict:
+        model_id = model or self.model
+        caller = {
+            "anthropic": self._call_anthropic,
+            "groq": self._call_groq,
+            "gemini": self._call_gemini,
+        }[self.provider]
+
+        def _once():
+            return parse_json_strict(caller(system, user, max_tokens, model_id))
+
+        return with_retry(_once, what=f"judge 호출({self.provider}:{model_id})")
+
+    # -- 제공사별 구현 -------------------------------------------------------
+    def _call_anthropic(self, system, user, max_tokens, model_id):
+        response = self.client.messages.create(
+            model=model_id, max_tokens=max_tokens, temperature=0,
+            system=system, messages=[{"role": "user", "content": user}],
         )
-        return parse_json_strict(response.content[0].text)
+        return response.content[0].text
 
-    return with_retry(_once, what="judge 호출")
+    def _call_groq(self, system, user, max_tokens, model_id):
+        # OpenAI 호환 인터페이스. response_format으로 JSON을 강제한다
+        # (프롬프트에 'JSON'이라는 단어가 있어야 이 옵션이 동작한다 —
+        #  CODING_MANUAL / JUDGE_RUBRIC 모두 조건을 만족한다).
+        response = self.client.chat.completions.create(
+            model=model_id, max_tokens=max_tokens, temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+        )
+        return response.choices[0].message.content
+
+    def _call_gemini(self, system, user, max_tokens, model_id):
+        model = self.client.GenerativeModel(model_id, system_instruction=system)
+        response = model.generate_content(
+            user,
+            generation_config={
+                "temperature": 0,
+                "max_output_tokens": max(max_tokens, _GEMINI_MIN_OUTPUT_TOKENS),
+                "response_mime_type": "application/json",
+            },
+        )
+        return response.text
+
+
+def make_judge(api_key: str, provider: str = None, model: str = None) -> JudgeClient:
+    """
+    judge 클라이언트를 만든다. SDK는 실제로 쓸 제공사의 것만 임포트한다
+    (anthropic을 안 깔아도 groq judge로 돌릴 수 있어야 한다).
+    """
+    name = judge_provider(provider)
+    model_id = model or judge_model(name)
+
+    if not api_key:
+        raise LLMCallError(
+            f"judge 제공사가 '{name}'인데 해당 API 키가 비어 있음 — "
+            f"api_keys['{judge_key_name(name)}']를 확인할 것"
+        )
+
+    if name == "anthropic":
+        import anthropic  # noqa: PLC0415
+        return JudgeClient(name, anthropic.Anthropic(api_key=api_key), model_id)
+
+    if name == "groq":
+        from groq import Groq  # noqa: PLC0415
+        return JudgeClient(name, Groq(api_key=api_key), model_id)
+
+    import google.generativeai as genai  # noqa: PLC0415
+    genai.configure(api_key=api_key)
+    return JudgeClient(name, genai, model_id)
+
+
+def call_judge_json(judge: JudgeClient, system: str, user: str,
+                    max_tokens: int = 400, model: str = None) -> dict:
+    """JudgeClient.json()의 함수형 별칭 (기존 호출부 호환용)."""
+    return judge.json(system, user, max_tokens=max_tokens, model=model)

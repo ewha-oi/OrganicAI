@@ -138,10 +138,35 @@ python -m pytest tests/ -q      # 17 passed
 |---|---|---|
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/apikey) | alpha 생성. 무료 티어 있음 |
 | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com/keys) | beta 생성. 무료 티어 있음 |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | 태깅·채점. **유료** |
+| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | 태깅·채점. **유료** (아래 참고) |
 
 키는 Colab **Secrets**(왼쪽 열쇠 아이콘)에 등록한다. 노트북 셀에 직접 붙여넣지 않는다.
 붙여넣으면 노트북을 공유하는 순간 키가 같이 나간다.
+
+### judge 제공사 바꾸기 (비용 0으로 돌리기)
+
+태깅·채점(judge)만 유료다. `COOP_JUDGE_PROVIDER`로 무료 제공사에 넘길 수 있다.
+
+```python
+import os
+os.environ["COOP_JUDGE_PROVIDER"] = "groq"
+os.environ["COOP_JUDGE_MODEL"]    = "openai/gpt-oss-120b"   # 셀 4에서 실제 ID 확인
+# 임포트 전에 설정할 것. 이미 임포트했으면 런타임 재시작.
+```
+
+| 제공사 | 비용 | 필요한 키 |
+|---|---|---|
+| `anthropic` (기본) | 유료 | `ANTHROPIC_API_KEY` |
+| `groq` | 무료 티어 | `GROQ_API_KEY` |
+| `gemini` | 무료 티어 | `GEMINI_API_KEY` |
+
+> ⚠️ **judge는 생성 모델과 다른 계열이어야 한다.** alpha=Gemini가 최종 산출물을
+> 작성하므로(`agents.FINALIZE_PROMPT`) judge까지 Gemini면 자기 계열 글을 자기가
+> 채점하게 되고(self-preference), `group_grade`가 부풀어 L3/L4가 과대 추정된다.
+> beta=Llama이므로 Llama 계열도 피해야 한다.
+>
+> 무료로 갈 때 안전한 조합은 **judge = Groq의 Llama가 아닌 계열**이다.
+> `tools/dryrun_frame.py`의 `[4]` 블록이 계열이 겹치면 경고를 띄운다.
 
 ### 3-2. 셀 1 — 세팅
 

@@ -40,6 +40,22 @@ from coop_pipeline.thresholds import THRESHOLDS, THRESHOLDS_SOURCE  # noqa: E402
 
 DEFAULT_SCENARIO = "scenarios/A4/A4_simple_energy_campaign.json"
 
+# 모델 ID에서 계열을 알아내기 위한 키워드. self-preference 편향 점검에 쓴다.
+MODEL_FAMILIES = ("gemini", "gemma", "claude", "llama", "gpt", "qwen",
+                  "deepseek", "mistral", "kimi", "moonshot", "grok")
+
+
+def model_family(model_id: str) -> str:
+    """
+    'gemini-2.5-flash' -> 'gemini', 'openai/gpt-oss-120b' -> 'gpt'
+    제공사가 아니라 모델 계열을 본다 (Groq는 llama 외 계열도 서빙하기 때문).
+    """
+    text = str(model_id).lower()
+    for family in MODEL_FAMILIES:
+        if family in text:
+            return family
+    return text.split("/")[-1].split("-")[0] or "unknown"
+
 
 # ---------------------------------------------------------------------------
 # 모의 로그 생성
@@ -274,11 +290,32 @@ def step_preflight():
             mark = "없음  -> pip install -r requirements.txt"
         print("  %-22s %-10s (%s)" % (module, mark, used_by))
 
-    from coop_pipeline.llm import MODELS
+    from coop_pipeline.llm import MODELS, judge_key_name, judge_model, judge_provider
     print("\n모델 ID (llm.MODELS):")
     for role in ("alpha", "beta", "judge"):
         print("  %-6s %s" % (role, MODELS[role]))
     print("  * 퇴역한 ID면 실행이 통째로 실패한다. docs/PIPELINE.md §2-2로 확인할 것.")
+
+    provider = judge_provider()
+    print("\njudge 제공사: %s (%s)" % (provider, judge_model()))
+    print("  필요한 키   : api_keys['%s']" % judge_key_name())
+    print("  비용        : %s" % (
+        "유료" if provider == "anthropic" else "무료 티어"))
+
+    # self-preference 편향 점검.
+    # 제공사가 아니라 **모델 ID**로 계열을 본다 (Groq는 llama 외 계열도 서빙한다).
+    judge_family = model_family(MODELS["judge"])
+    clash = [role for role in ("alpha", "beta")
+             if model_family(MODELS[role]) == judge_family]
+    print("  계열        : judge=%s / alpha=%s / beta=%s" % (
+        judge_family, model_family(MODELS["alpha"]), model_family(MODELS["beta"])))
+    if clash:
+        print("  !! 경고: judge가 %s와 같은 계열이다 (self-preference 편향)."
+              % ", ".join(clash))
+        print("     자기 계열 산출물을 자기가 채점하면 group 점수가 부풀 수 있다.")
+        print("     특히 alpha는 최종 산출물 작성자이므로 alpha와 겹치면 치명적이다.")
+    else:
+        print("  OK: judge가 alpha/beta 어느 쪽과도 다른 계열이다.")
 
     print("\nAPI 키 환경변수 (값은 출력하지 않는다):")
     for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):

@@ -56,6 +56,7 @@ from pathlib import Path
 
 from .agents import group_output_text, run_dyad, run_solo
 from .classify import classify_log, format_result
+from .llm import judge_key_name, judge_model, judge_provider
 from .scoring import attach_scores, detect_new_idea, score_a1, score_a2_a4
 from .tagging import tag_log
 from .thresholds import THRESHOLDS
@@ -153,12 +154,34 @@ def run_solo_batch(scenario: dict, api_keys: dict, n_reps: int = DEFAULT_SOLO_RE
     return outputs
 
 
+def judge_key(api_keys: dict) -> str:
+    """
+    현재 judge 제공사(COOP_JUDGE_PROVIDER)에 맞는 API 키를 api_keys에서 꺼낸다.
+
+    judge를 anthropic -> groq로 바꾸면 필요한 키도 바뀐다. 호출부가
+    api_keys["anthropic"]을 직접 참조하면 제공사를 바꿀 때마다 코드를 고쳐야 하므로
+    여기 한 곳에서만 결정한다.
+    """
+    name = judge_key_name()
+    key = api_keys.get(name)
+    if not key:
+        raise PipelineError(
+            f"judge 제공사가 '{judge_provider()}'인데 api_keys['{name}']가 비어 있음.\n"
+            f"  - 키를 넣거나\n"
+            f"  - 다른 제공사를 쓰려면 임포트 전에 "
+            f"os.environ['COOP_JUDGE_PROVIDER']를 바꾸고 런타임을 재시작할 것"
+        )
+    return key
+
+
 def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
-                  anthropic_key: str) -> dict:
+                  judge_api_key: str) -> dict:
     """
     단독/그룹 산출물을 채점한다.
     A1  : scoring.checklist 기반 결정론 채점 (API 호출 없음)
     A2/A4: LLM-judge 1~5점 (산출물 1개당 1회 호출)
+
+    judge_api_key는 judge_key(api_keys)로 얻는다 (제공사에 따라 어느 키인지 달라진다).
     """
     task_type = scenario["task_type"]
     solo_texts = [o["output"] for o in solo_outputs]
@@ -168,10 +191,10 @@ def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
         solo_values = [score_a1(text, checklist) for text in solo_texts]
         group_value = score_a1(group_text, checklist)
     else:
-        solo_values = [score_a2_a4(text, anthropic_key) for text in solo_texts]
-        group_value = score_a2_a4(group_text, anthropic_key)
+        solo_values = [score_a2_a4(text, judge_api_key) for text in solo_texts]
+        group_value = score_a2_a4(group_text, judge_api_key)
 
-    new_idea = detect_new_idea(solo_texts, group_text, anthropic_key)
+    new_idea = detect_new_idea(solo_texts, group_text, judge_api_key)
     return {"solo_values": solo_values, "group_value": group_value,
             "new_idea_flag": new_idea}
 
@@ -195,10 +218,14 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     반환값은 classify_log()의 결과에 'log'와 'solo_outputs'가 추가된 딕셔너리.
     """
     scenario = load_scenario(scenario_path)
+    jkey = judge_key(api_keys)   # 키가 없으면 대화를 돌리기 전에 여기서 멈춘다
 
     def step(msg):
         if verbose:
             print(f"[{scenario['scenario_id']}/{condition}] {msg}")
+
+    if verbose:
+        step(f"judge = {judge_provider()}:{judge_model()}")
 
     # 1) 단독 조건
     if solo_outputs is None:
@@ -221,12 +248,12 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
 
     # 3) 태깅
     step("발화 태깅")
-    log = tag_log(log, api_key=api_keys["anthropic"])
+    log = tag_log(log, api_key=jkey)
 
     # 4~5) 채점 + 부착
     step("채점")
     group_text = group_output_text(log)
-    scores = score_outputs(scenario, solo_outputs, group_text, api_keys["anthropic"])
+    scores = score_outputs(scenario, solo_outputs, group_text, jkey)
     log["group_output_text"] = group_text
     log = attach_scores(log, scores["solo_values"], scores["group_value"],
                         scores["new_idea_flag"])
