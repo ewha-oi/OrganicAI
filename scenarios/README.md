@@ -15,10 +15,10 @@
 | `scenario_id` | 항상 필수 | `{과제유형}_{복잡도}_{시나리오명}` 형식 (예: `A1_simple_meeting`, 이것이 파일 제목이 됨) |
 | `task_type` | 항상 필수 | `"A1"`, `"A2"`, `"A4"` 중 하나 |
 | `complexity` | 항상 필수 | `"simple"` 또는 `"complex"` |
-| `task_variants.alpha` | A1만 필수 | alpha가 받는 정보만 포함한 지문 |
-| `task_variants.beta` | A1만 필수 | beta가 받는 정보만 포함한 지문 (alpha와 겹치지 않게 작성) |
-| `task_variants.shared` | A2/A4 필수 | alpha, beta에게 동일하게 제공하는 지문 |
-| `task_variants.solo` | 항상 필수 | 단독 조건용 지문 |
+| `task_variants.alpha` | A1·A4 필수 | alpha가 받는 지문 (A1은 정보 일부, A4는 창작 제약 일부) |
+| `task_variants.beta` | A1·A4 필수 | beta가 받는 지문 (alpha와 겹치지 않게 작성) |
+| `task_variants.shared` | A2만 필수 | alpha, beta에게 동일하게 제공하는 지문 |
+| `task_variants.solo` | 항상 필수 | 단독 조건용 지문. A1·A4는 `alpha + beta`를 모두 합친 버전이어야 한다 |
 | `scoring.checklist` | A1만 필수 | 정답 채점용 키워드 목록 |
 
 ---
@@ -29,7 +29,10 @@
 |---|---|---|
 | A1 (정보통합) | `alpha` + `beta` (서로 다른 정보) + `solo` (정보 통합 버전) | Checklist 기반 자동 매칭 |
 | A2 (의견수렴) | `shared` + `solo` | LLM Judge 등급 (1~5점) |
-| A4 (창의공동생성) | `shared` + `solo` | LLM Judge 등급 (1~5점) |
+| A4 (창의공동생성) | `alpha` + `beta` (서로 다른 창작 제약) + `solo` (제약 통합 버전) | LLM Judge 등급 (1~5점) |
+
+> A2만 `shared`를 쓴다. A2는 **같은 사안을 놓고 입장을 조율**하는 과제이므로 두 에이전트가
+> 동일한 지문을 받아야 성립한다. A1·A4는 비대칭이어야 서로를 참조할 이유가 생긴다.
 
 ---
 
@@ -143,6 +146,19 @@ AI에게 시나리오 생성을 요청할 때 아래 형식을 복붙해서 사�
 - 두 정보를 교차해야만 발견할 수 있는 모순 또는 결론이 포함될 것
 - solo는 alpha + beta 정보를 모두 포함
 - scoring.checklist는 짧은 키워드로 작성 (예: "수요일", "B실")
+
+[A2 추가 조건]
+- task_variants는 shared 하나만 (alpha/beta로 나누지 말 것)
+- 입장이 갈릴 수 있는 사안일 것 (정답이 하나로 정해지면 안 됨)
+- scoring 필드는 작성하지 말 것
+
+[A4 추가 조건]
+- task_variants를 alpha / beta로 나눌 것 (shared 사용 금지)
+- alpha와 beta에게 서로 다른 창작 제약을 줄 것
+  (예: alpha=분위기·감성 담당, beta=구조·규칙 담당)
+- 두 산출물을 합쳐야 완성되는 구조일 것
+- solo는 alpha + beta 제약을 모두 포함
+- scoring 필드는 작성하지 말 것
 ```
 
 ---
@@ -184,6 +200,9 @@ beta:  "게임의 구조와 규칙(캐릭터, 진행 방식, 준비물)을 담�
 → 서로의 산출물을 합쳐야 완성된 기획안이 나옴
 ```
 
+`solo`는 A1과 마찬가지로 **`alpha` + `beta` 제약을 모두 합친 지문**이어야 한다.
+한쪽 제약만 넣으면 단독 조건이 더 쉬운 과제가 되어 그룹과의 비교가 성립하지 않는다.
+
 ---
 
 ### complexity 설계 기준
@@ -216,8 +235,14 @@ beta:  "게임의 구조와 규칙(캐릭터, 진행 방식, 준비물)을 담�
 - [ ] `scoring.checklist`가 짧고 명확한 키워드로 작성되어 있는가?
 
 ### A4 추가 확인
+- [ ] `alpha`와 `beta` 지문이 따로 있는가? (`shared` 하나만 있으면 안 된다)
 - [ ] alpha와 beta에게 서로 다른 창작 제약이 주어졌는가?
 - [ ] 두 산출물을 합쳐야 완성되는 구조인가?
+- [ ] `solo`에 `alpha + beta` 제약이 모두 들어있는가?
+
+### A2 추가 확인
+- [ ] `shared` 지문이 있는가? (A2는 양쪽이 같은 지문을 받아야 한다)
+- [ ] 정답이 하나로 정해지지 않는, 입장이 갈릴 수 있는 사안인가?
 
 ---
 
@@ -225,51 +250,32 @@ beta:  "게임의 구조와 규칙(캐릭터, 진행 방식, 준비물)을 담�
 
 | 파일 | 설명 |
 |---|---|
-| `scenarios/A1/A1_simple_meeting.json` | 정보통합 예시 (동아리 회의실 예약) |
-| `scenarios/A2/A2_simple_budget.json` | 의견수렴 예시 (예산 사용처 합의) |
-| `scenarios/A4/A4_simple_game.json` | 창의공동생성 예시 (미니게임 기획) |
+| `scenarios/A1/A1_simple_meeting.json` | 정보통합 예시 (동아리 회의실 예약) — **비대칭 구조 참고용** |
+| `scenarios/A1/A1_complex_power_outage.json` | 정보통합 예시 (정전 원인 추적) |
+| `scenarios/A2/A2_simple_MT_location.json` | 의견수렴 예시 (MT 장소 합의) |
+| `scenarios/A2/A2_complex_budget_allocation.json` | 의견수렴 예시 (예산 배분 합의) |
+| `scenarios/A4/A4_simple_energy_campaign.json` | 창의공동생성 예시 (절전 캠페인) — ⚠️ 아래 참고 |
+| `scenarios/A4/A4_simple_festival.json` | 창의공동생성 예시 (축제 기획) — ⚠️ 아래 참고 |
+| `scenarios/A4/A4_complex_onboarding_program.json` | 창의공동생성 예시 (신입 온보딩) — ⚠️ 아래 참고 |
+
+> ⚠️ **A4 예시 3개는 아직 `shared` 구조로 되어 있어 위의 A4 규칙을 만족하지 않는다.**
+> 비대칭 전환 작업이 진행 중이므로, 새 A4 시나리오를 쓸 때 이 파일들을 형식 참고용으로
+> 쓰지 말 것. 비대칭 구조는 `A1_simple_meeting.json`을 참고한다.
 
 ---
 
-## Colab 검증 코드
+## 작성 후 검증
 
-작성 후 아래 코드로 형식 오류를 미리 확인한다.
+내 컴퓨터에서 아래 한 줄로 형식 오류를 확인한다 (API 호출 없음, 무료).
 
-```python
-import os, json
-
-scenario_dir = "/content/OrganicAI/scenarios"
-errors = []
-ok = []
-
-for subdir in sorted(os.listdir(scenario_dir)):
-    subpath = os.path.join(scenario_dir, subdir)
-    if not os.path.isdir(subpath):
-        continue
-    for fname in sorted(os.listdir(subpath)):
-        if not fname.endswith(".json"):
-            continue
-        fpath = os.path.join(subpath, fname)
-        label = f"{subdir}/{fname}"
-        with open(fpath, encoding="utf-8") as f:
-            scenario = json.load(f)
-        issues = []
-        for field in ["scenario_id", "task_type", "complexity", "task_variants"]:
-            if field not in scenario:
-                issues.append(f"'{field}' 필드 없음")
-        expected_id = fname.replace(".json", "")
-        if scenario.get("scenario_id") != expected_id:
-            issues.append(f"scenario_id('{scenario.get('scenario_id')}')가 파일명('{expected_id}')과 불일치")
-        if issues:
-            errors.append((label, issues))
-            print(f"❌ {label}")
-            for i in issues:
-                print(f"     → {i}")
-        else:
-            ok.append(label)
-            print(f"✅ {label}")
-
-print(f"\n결과: {len(ok)}개 통과 / {len(errors)}개 오류")
+```bash
+python -c "import sys; sys.path.append('src'); from coop_pipeline.runner import check_scenario_dir; check_scenario_dir('scenarios')"
 ```
 
-✅만 뜨면 PR을 올린다.
+내 파일이 `OK`로 뜨면 PR을 올린다.
+
+**검사 절차 전체(API 키 발급 · Colab 설정 · 실기동 · 에러 대처)는
+[`docs/SCENARIO_TEST.md`](../docs/SCENARIO_TEST.md) 참고.**
+
+> 이 문서는 **무엇을 쓸 것인가**(내용·설계 규칙)를 다루고,
+> `docs/SCENARIO_TEST.md`는 **어떻게 검사하고 실행할 것인가**(절차)를 다룬다.
