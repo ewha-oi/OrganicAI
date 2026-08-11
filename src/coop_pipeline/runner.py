@@ -191,8 +191,9 @@ def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
         solo_values = [score_a1(text, checklist) for text in solo_texts]
         group_value = score_a1(group_text, checklist)
     else:
-        solo_values = [score_a2_a4(text, judge_api_key) for text in solo_texts]
-        group_value = score_a2_a4(group_text, judge_api_key)
+        solo_values = [score_a2_a4(text, judge_api_key, task_type)
+                       for text in solo_texts]
+        group_value = score_a2_a4(group_text, judge_api_key, task_type)
 
     new_idea = detect_new_idea(solo_texts, group_text, judge_api_key)
     return {"solo_values": solo_values, "group_value": group_value,

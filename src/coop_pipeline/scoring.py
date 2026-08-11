@@ -116,10 +116,18 @@ def anonymize_output(text: str) -> str:
 # ---------------------------------------------------------------------------
 # A2 / A4: LLM-judge 등급 (1~5점)
 # ---------------------------------------------------------------------------
-JUDGE_RUBRIC = """당신은 과제 산출물의 품질을 평가하는 채점자입니다.
+_HEADER = """당신은 과제 산출물의 품질을 평가하는 채점자입니다.
 아래 산출물을 읽고 1~5점으로 평가하세요. 이 산출물이 단독 조건인지 그룹 조건인지는
 알려주지 않습니다 - 오직 내용만 보고 평가하세요.
+"""
 
+_FOOTER = """
+반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 추가하지 마세요.
+{"grade": 1~5 중 하나, "reason": "..."}
+"""
+
+# A2(의견수렴): 대립하는 입장을 어떻게 조율했는가가 평가 대상이다.
+JUDGE_RUBRIC_A2 = _HEADER + """
 1점: 한쪽 입장/관점만 반영
 2점: 절충 시도했으나 피상적
 3점: 핵심 논거를 균형있게 반영
@@ -131,29 +139,64 @@ JUDGE_RUBRIC = """당신은 과제 산출물의 품질을 평가하는 채점자
 - 지문의 제약(예산, 개수, 기한 등)을 위반한 산출물은 최대 3점까지만 줄 수 있습니다.
 - 결론을 하나로 확정하지 않고 여러 안을 나열만 한 산출물은 최대 2점까지만 줄 수 있습니다.
 - 확신이 서지 않으면 낮은 쪽 점수를 주세요.
+""" + _FOOTER
 
-반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 절대 추가하지 마세요.
-{"grade": 1~5 중 하나, "reason": "..."}
-"""
+# A4(창의공동생성): 대립하는 입장 자체가 없는 과제다.
+#
+# A2 척도를 A4에 그대로 쓰면 안 된다. 파일럿에서 확인된 실패:
+# A4 산출물 5개(단독 4 + 그룹 1)가 전부 1~2점을 받았고, 감점 사유가 모두
+# "다른 관점·트레이드오프·대안이 없다"였다. 캠페인 기획 과제에는 조율할 대립이
+# 없으니 당연한 결과다. 그 결과 grade_gap_min=2를 구조적으로 넘을 수 없어
+# A4는 판정이 Q3에 고정됐다. 또 "여러 안을 나열만 하면 최대 2점" 규칙은
+# '아이디어를 정확히 3개 제시하라'는 A4 지문과 정면으로 충돌한다.
+JUDGE_RUBRIC_A4 = _HEADER + """
+1점: 과제가 요구한 항목을 빠뜨렸거나 내용이 이름뿐임
+2점: 요구 항목은 채웠으나 누구나 떠올릴 수준이고 항목들이 서로 비슷함
+3점: 요구를 충족하고 각 항목이 구체적이며 실행 가능함
+4점: 3점에 더해 항목들이 서로 다른 상황·원인을 겨냥해 중복이 없음
+5점: 4점에 더해 통상적으로 나오기 어려운 접근이 포함됨
+
+채점 규칙:
+- 산출물의 길이나 형식이 아니라 내용만 보고 판단하세요.
+- 지문의 제약(예산, 개수, 기한 등)을 위반한 산출물은 최대 3점까지만 줄 수 있습니다.
+- 이 과제는 여러 아이디어를 나열하는 것이 요구사항입니다. 나열했다는 이유로 감점하지 마세요.
+- 찬반 대립이나 트레이드오프 조율은 이 과제의 평가 대상이 아닙니다.
+- 확신이 서지 않으면 낮은 쪽 점수를 주세요.
+""" + _FOOTER
+
+JUDGE_RUBRICS = {"A2": JUDGE_RUBRIC_A2, "A4": JUDGE_RUBRIC_A4}
 
 
-def score_a2_a4(output_text: str, api_key: str, model: str = None,
-                provider: str = None) -> int:
+def judge_rubric(task_type: str) -> str:
+    """과제 유형에 맞는 채점 척도를 고른다. 모르는 유형이면 조용히 넘기지 않는다."""
+    if task_type not in JUDGE_RUBRICS:
+        raise ValueError(
+            f"LLM-judge 등급 채점은 {sorted(JUDGE_RUBRICS)}만 지원한다: '{task_type}' "
+            f"(A1은 score_a1의 체크리스트 채점을 쓴다)"
+        )
+    return JUDGE_RUBRICS[task_type]
+
+
+def score_a2_a4(output_text: str, api_key: str, task_type: str,
+                model: str = None, provider: str = None) -> int:
     """
     LLM-judge로 1~5점 등급 산출.
     블라인드: 단독/그룹 여부를 프롬프트에 노출하지 않고, 화자 표기도 제거한다.
+
+    task_type은 기본값을 두지 않는다. 과제와 안 맞는 척도를 쓰면 모든 산출물이
+    같은 이유로 바닥 등급을 받는데, 그것이 '협력 이득 없음'과 구별되지 않는다.
     """
-    return score_a2_a4_detail(output_text, api_key, model=model,
-                              provider=provider)["grade"]
+    return score_a2_a4_detail(output_text, api_key, task_type,
+                              model=model, provider=provider)["grade"]
 
 
-def score_a2_a4_detail(output_text: str, api_key: str, model: str = None,
-                       provider: str = None) -> dict:
+def score_a2_a4_detail(output_text: str, api_key: str, task_type: str,
+                       model: str = None, provider: str = None) -> dict:
     """score_a2_a4와 동일하되 judge가 쓴 근거(reason)까지 반환한다."""
     client = make_judge(api_key, provider=provider, model=model)
     parsed = call_judge_json(
         client,
-        system=JUDGE_RUBRIC,
+        system=judge_rubric(task_type),
         user=f"산출물:\n{anonymize_output(output_text)}",
         max_tokens=300,
     )
