@@ -209,14 +209,36 @@ from groq import Groq
 print([m.id for m in Groq(api_key=API_KEYS["groq"]).models.list().data])
 ```
 
-목록에 `gemini-2.5-flash` / `llama-3.3-70b-versatile`이 없으면 **코드를 고치지 말고**
-환경변수로 교체한다 (`llm.py`가 환경변수를 먼저 읽는다).
+**목록에 있다고 쓸 수 있는 것이 아니다.** `list_models`는 계정의 접근 권한을 반영하지
+않는다. 실제로 목록에 `gemini-2.5-flash`가 보이는데도 호출하면
+`404 no longer available to new users`가 오는 경우가 있다 (새로 만든 프로젝트).
+그러니 **한 번 호출해 본다.**
+
+```python
+for cand in ["gemini-2.5-flash", "gemini-flash-latest"]:
+    try:
+        print("OK  ", cand, genai.GenerativeModel(cand).generate_content("ping").text[:30])
+    except Exception as e:
+        print("FAIL", cand, type(e).__name__, str(e)[:300])
+```
+
+에러 코드로 원인이 갈린다.
+
+| 코드 | 뜻 | 대응 |
+|---|---|---|
+| 404 `no longer available to new users` | 프로젝트가 컷오프 이후 생성됨 | 컷오프 이전 프로젝트에서 키를 발급받거나 신형 모델로 |
+| 403 `project has been denied access` | 무료·무결제 프로젝트에 안 열린 모델 | 결제 등록, 또는 다른 모델 |
+| 429 `quota exceeded` | 그 모델의 무료 쿼터가 0 | 다른 모델 |
+
+`OK`가 뜬 ID로 **코드를 고치지 말고** 환경변수로 교체한다 (`llm.py`가 환경변수를 먼저 읽는다).
 
 ```python
 import os
-os.environ["COOP_ALPHA_MODEL"] = "실제 있는 ID"
-os.environ["COOP_BETA_MODEL"]  = "실제 있는 ID"
+os.environ["COOP_ALPHA_MODEL"] = "실제 되는 ID"
+os.environ["COOP_BETA_MODEL"]  = "실제 되는 ID"
 # 임포트 전에 설정해야 반영된다. 이미 임포트했으면 런타임 재시작.
+# 재시작이 곤란하면 딕셔너리를 직접 고친다 (agents.py가 같은 객체를 참조한다):
+#   from coop_pipeline import llm; llm.MODELS["alpha"] = "실제 되는 ID"
 ```
 
 ### 3-5. 셀 4 — 작게 한 번 (권장 첫 실행)

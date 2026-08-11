@@ -99,7 +99,10 @@ from groq import Groq
 print([m.id for m in Groq(api_key=API_KEYS["groq"]).models.list().data])
 ```
 
-목록에 없는 ID를 쓰고 있으면 아래처럼 교체한다. **코드는 고치지 않는다.**
+목록에 있어도 **실제로 호출되는지는 별개다** (`list_models`는 접근 권한을 반영하지
+않는다). 확인 절차와 에러 코드별 대응은 `docs/DRYRUN.md` §3-4에 정리해 두었다.
+
+쓸 수 없는 ID면 아래처럼 교체한다. **코드는 고치지 않는다.**
 
 ```python
 import os

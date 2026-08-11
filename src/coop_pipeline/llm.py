@@ -155,9 +155,16 @@ def with_retry(fn, what: str = "LLM 호출"):
 # system 프롬프트 전달 방식, JSON 강제 옵션)는 전부 이 파일 안에 가둔다.
 # temperature=0 고정 — 채점은 재현 가능해야 한다.
 
-# Gemini 2.5 계열은 추론 토큰이 출력 한도를 같이 소모한다. 태깅 프롬프트 기준
-# max_tokens=500을 그대로 주면 JSON이 중간에 잘려 파싱이 실패한다.
-_GEMINI_MIN_OUTPUT_TOKENS = 4096
+# 추론(reasoning) 모델은 추론 토큰이 출력 한도를 같이 소모한다. 태깅 프롬프트 기준
+# max_tokens=400~500을 그대로 주면 추론에 전부 쓰고 본문이 비거나 JSON이 중간에
+# 잘려 파싱이 실패한다. 제공사를 가리지 않는 함정이므로 하한을 공통으로 둔다
+# (Gemini 2.5 계열, Groq의 gpt-oss/qwen3 계열에서 모두 확인됨).
+_MIN_OUTPUT_TOKENS = 4096
+
+# reasoning_effort를 받는 Groq 모델. 목록에 없는 모델에 보내면 400이 오므로
+# 넣기 전에 확인한다. 없어도 위의 토큰 하한만으로 동작은 한다 —
+# 이건 추론량을 줄여 지연시간과 토큰을 아끼는 최적화다.
+_GROQ_REASONING_MODELS = ("gpt-oss", "qwen3")
 
 
 class JudgeClient:
@@ -202,13 +209,26 @@ class JudgeClient:
         # OpenAI 호환 인터페이스. response_format으로 JSON을 강제한다
         # (프롬프트에 'JSON'이라는 단어가 있어야 이 옵션이 동작한다 —
         #  CODING_MANUAL / JUDGE_RUBRIC 모두 조건을 만족한다).
-        response = self.client.chat.completions.create(
-            model=model_id, max_tokens=max_tokens, temperature=0,
+        kwargs = dict(
+            model=model_id, max_tokens=max(max_tokens, _MIN_OUTPUT_TOKENS),
+            temperature=0,
             response_format={"type": "json_object"},
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
         )
-        return response.choices[0].message.content
+        if any(tag in model_id for tag in _GROQ_REASONING_MODELS):
+            kwargs["reasoning_effort"] = "low"
+
+        response = self.client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
+        if not content:
+            # 추론만 하고 본문을 못 낸 경우. 조용히 넘기면 파싱 단계에서
+            # 엉뚱한 에러가 나므로 여기서 원인을 밝혀 둔다.
+            raise LLMCallError(
+                f"groq judge({model_id})가 빈 응답을 반환했다 — "
+                f"max_tokens={kwargs['max_tokens']}가 추론 토큰에 모두 소모된 것으로 보인다"
+            )
+        return content
 
     def _call_gemini(self, system, user, max_tokens, model_id):
         model = self.client.GenerativeModel(model_id, system_instruction=system)
@@ -216,7 +236,7 @@ class JudgeClient:
             user,
             generation_config={
                 "temperature": 0,
-                "max_output_tokens": max(max_tokens, _GEMINI_MIN_OUTPUT_TOKENS),
+                "max_output_tokens": max(max_tokens, _MIN_OUTPUT_TOKENS),
                 "response_mime_type": "application/json",
             },
         )
