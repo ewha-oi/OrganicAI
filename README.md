@@ -80,7 +80,7 @@ print(result["level"])                   # "L0" ~ "L4"
 ## 🔗 링크
 
 - 팀 노션: https://app.notion.com/p/39eba2af2b00804da927ea9edacdb3ed?source=copy_link
-- Github: https://github.com/uri-git23/OrganicAI.git
+- Github: https://github.com/ewha-oi/OrganicAI.git
 - Google Drive(데이터용): `유기농지능 > data`
   - 점 세 개 클릭 → 정리 → 바로가기 추가 → "내 드라이브"에 등록
 
@@ -99,7 +99,7 @@ print(result["level"])                   # "L0" ~ "L4"
 클론:
 
 ```
-git clone https://github.com/uri-git23/OrganicAI.git
+git clone https://github.com/ewha-oi/OrganicAI.git
 cd OrganicAI
 python -m venv venv
 ```
@@ -135,7 +135,7 @@ Google Colab 새 노트북 생성 후 첫 번째 셀 실행:
 from google.colab import drive
 drive.mount('/content/drive')
 
-!git clone https://github.com/uri-git23/OrganicAI.git
+!git clone https://github.com/ewha-oi/OrganicAI.git
 %cd OrganicAI
 !pip install -r requirements.txt -q
 

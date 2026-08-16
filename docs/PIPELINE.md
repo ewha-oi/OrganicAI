@@ -37,7 +37,7 @@ scenarios/A1_simple_meeting.json
 from google.colab import drive
 drive.mount('/content/drive')
 
-!git clone https://github.com/uri-git23/OrganicAI.git
+!git clone https://github.com/ewha-oi/OrganicAI.git
 %cd OrganicAI
 !pip install -r requirements.txt -q
 

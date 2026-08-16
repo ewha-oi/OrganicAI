@@ -171,7 +171,7 @@ os.environ["COOP_JUDGE_MODEL"]    = "openai/gpt-oss-120b"   # 셀 4에서 실제
 ### 3-2. 셀 1 — 세팅
 
 ```python
-!git clone https://github.com/uri-git23/OrganicAI.git
+!git clone https://github.com/ewha-oi/OrganicAI.git
 %cd OrganicAI
 !pip install -r requirements.txt -q
 
