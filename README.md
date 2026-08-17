@@ -30,20 +30,57 @@
 
 ```
 OrganicAI/
-├── src/coop_pipeline/    # 핵심 로직 (태깅, 판정, 검증)
-├── notebooks/            # Colab 실행용 노트북
+├── src/coop_pipeline/    # 핵심 로직
+│   ├── runner.py         #   ★ 진입점: 시나리오 넣으면 L0~L4가 나온다
+│   ├── agents.py         #   에이전트 실행 (gemini / llama)
+│   ├── tagging.py        #   발화 태깅 (claude judge)
+│   ├── scoring.py        #   산출물 채점
+│   ├── features.py       #   정량 지표 추출
+│   ├── classify.py       #   L0~L4 결정 트리
+│   ├── validate_log.py   #   로그 형식 검증
+│   ├── thresholds.py     #   임계값 로더 (configs/를 읽는다)
+│   └── llm.py            #   모델 ID / 재시도 / JSON 파싱 공통 래퍼
+├── docs/                 # 실행 가이드와 채점 기준 ← 먼저 읽을 것
 ├── scenarios/            # 시나리오 지문
 ├── configs/              # threshold 등 설정값
-├── tests/                # 자동 테스트
-├── data/                 # 실제 로그는 Drive에 저장
+├── tests/                # 자동 테스트 (API 키 없이 돌아간다)
+├── data/                 # 실제 로그는 Drive에 저장 (git에 올리지 않음)
 ├── requirements.txt      # 라이브러리 목록
 └── README.md
 ```
 
+## 📖 문서
+
+| 문서 | 언제 읽는가 |
+|---|---|
+| [docs/PIPELINE.md](docs/PIPELINE.md) | **실행 방법.** 처음이면 여기부터 |
+| [docs/RUBRIC.md](docs/RUBRIC.md) | 채점 기준, 층위 정의, 임계값 캘리브레이션 절차 |
+| [docs/CODING_MANUAL.md](docs/CODING_MANUAL.md) | 발화 태깅 기준 (인간 코더용 + LLM 프롬프트 원본) |
+| [scenarios/README.md](scenarios/README.md) | 시나리오 작성법 |
+
+## ⚡ 가장 짧은 실행
+
+```python
+import sys; sys.path.append('src')
+from coop_pipeline.runner import check_scenario_dir, run_scenario
+
+check_scenario_dir("scenarios")          # 형식 점검 (API 호출 없음)
+
+result = run_scenario(
+    "scenarios/A1/A1_simple_meeting.json",
+    condition="명시",
+    api_keys={"gemini": ..., "groq": ..., "anthropic": ...},
+    out_dir=DATA_DIR,
+)
+print(result["level"])                   # "L0" ~ "L4"
+```
+
+자세한 내용과 결과 읽는 법은 [docs/PIPELINE.md](docs/PIPELINE.md) 참고.
+
 ## 🔗 링크
 
 - 팀 노션: https://app.notion.com/p/39eba2af2b00804da927ea9edacdb3ed?source=copy_link
-- Github: https://github.com/uri-git23/OrganicAI.git
+- Github: https://github.com/ewha-oi/OrganicAI.git
 - Google Drive(데이터용): `유기농지능 > data`
   - 점 세 개 클릭 → 정리 → 바로가기 추가 → "내 드라이브"에 등록
 
@@ -62,7 +99,7 @@ OrganicAI/
 클론:
 
 ```
-git clone https://github.com/uri-git23/OrganicAI.git
+git clone https://github.com/ewha-oi/OrganicAI.git
 cd OrganicAI
 python -m venv venv
 ```
@@ -98,7 +135,7 @@ Google Colab 새 노트북 생성 후 첫 번째 셀 실행:
 from google.colab import drive
 drive.mount('/content/drive')
 
-!git clone https://github.com/uri-git23/OrganicAI.git
+!git clone https://github.com/ewha-oi/OrganicAI.git
 %cd OrganicAI
 !pip install -r requirements.txt -q
 

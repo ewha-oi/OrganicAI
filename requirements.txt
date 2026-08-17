@@ -1,7 +1,19 @@
-google-generativeai
-groq
-anthropic
-pandas
-numpy
-scikit-learn
-pytest
+# 하한 버전을 명시한다.
+# 상한을 고정하지 않는 이유: Colab에 미리 설치된 pandas/numpy/scikit-learn과
+# 충돌하면 런타임을 재시작해야 해서 오히려 번거롭다.
+# 대신 SDK는 하한을 두어, 너무 오래된 버전에서 API 인터페이스가 다른 문제를 막는다.
+
+# --- 에이전트 실행용 SDK (agents.py) ---
+google-generativeai>=0.8.0
+groq>=0.11.0
+
+# --- judge(태깅/채점)용 SDK (tagging.py, scoring.py) ---
+anthropic>=0.40.0
+
+# --- 분석용 ---
+pandas>=1.5
+numpy>=1.23
+scikit-learn>=1.2          # Cohen's Kappa (cohen_kappa_score)
+
+# --- 테스트 ---
+pytest>=7.0
