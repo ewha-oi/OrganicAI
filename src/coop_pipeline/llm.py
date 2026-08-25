@@ -161,10 +161,13 @@ def with_retry(fn, what: str = "LLM 호출"):
 # (Gemini 2.5 계열, Groq의 gpt-oss/qwen3 계열에서 모두 확인됨).
 _MIN_OUTPUT_TOKENS = 4096
 
-# reasoning_effort를 받는 Groq 모델. 목록에 없는 모델에 보내면 400이 오므로
-# 넣기 전에 확인한다. 없어도 위의 토큰 하한만으로 동작은 한다 —
+# reasoning_effort를 받는 Groq 모델과, 그 모델이 받아들이는 값.
+# **값이 계열마다 다르다.** 틀린 값을 보내면 400이므로 하나로 뭉뚱그릴 수 없다.
+#     gpt-oss : low / medium / high
+#     qwen3   : none / default      ("low"를 보내면 400 — 2026-08 확인)
+# 목록에 없는 모델에는 아예 보내지 않는다. 안 보내도 위의 토큰 하한만으로 동작은 한다 —
 # 이건 추론량을 줄여 지연시간과 토큰을 아끼는 최적화다.
-_GROQ_REASONING_MODELS = ("gpt-oss", "qwen3")
+_GROQ_REASONING_EFFORT = {"gpt-oss": "low", "qwen3": "none"}
 
 
 class JudgeClient:
@@ -216,8 +219,10 @@ class JudgeClient:
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
         )
-        if any(tag in model_id for tag in _GROQ_REASONING_MODELS):
-            kwargs["reasoning_effort"] = "low"
+        for tag, effort in _GROQ_REASONING_EFFORT.items():
+            if tag in model_id:
+                kwargs["reasoning_effort"] = effort
+                break
 
         response = self.client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
