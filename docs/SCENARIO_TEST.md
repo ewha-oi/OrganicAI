@@ -181,7 +181,7 @@ res = run_scenario(
 | `scenario_id가 파일명과 불일치` | 둘 중 하나를 고쳐 맞출 것 |
 | `judge 제공사가 'groq'인데 api_keys['groq']가 비어 있음` | Colab 보안 비밀의 **노트북 액세스 토글**을 켤 것 (0-2의 5번) |
 | `NameError: API_KEYS` | `from google.colab import userdata` 셀을 실행하지 않음 |
-| `413 ... Request too large` | 분당 토큰 한도 초과. `max_turns`를 5로 낮출 것 |
+| `413 ... Request too large` | 분당 토큰 한도 초과. `max_turns`를 5로 낮출 것 (**데이터 수집 중이면 `max_turns`는 동결값이다 — 대신 `agents.RATE_LIMIT_SLEEP`을 올릴 것**) |
 | `LLMCallError ... 3회 모두 실패` | 분당 호출 한도. 1~2분 기다렸다 재실행 |
 | `설정 경고: max_turns=...` | `max_turns`를 5 이상으로. 그 아래면 판정이 내용과 무관하게 L0/L1이 된다 |
 | 코드를 고쳤는데 옛날 대로 동작 | `!git pull` 후 **런타임 → 세션 다시 시작** 필수 |

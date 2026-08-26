@@ -56,6 +56,7 @@ OrganicAI/
 | [docs/PIPELINE.md](docs/PIPELINE.md) | **실행 방법.** 처음이면 여기부터 |
 | [docs/RUBRIC.md](docs/RUBRIC.md) | 채점 기준, 층위 정의, 임계값 캘리브레이션 절차 |
 | [docs/CODING_MANUAL.md](docs/CODING_MANUAL.md) | 발화 태깅 기준 (인간 코더용 + LLM 프롬프트 원본) |
+| [docs/MODEL_ASSIGNMENT.md](docs/MODEL_ASSIGNMENT.md) | alpha/beta/judge를 어떻게 골랐나. 모델이 퇴역해 다시 배정할 때 |
 | [scenarios/README.md](scenarios/README.md) | 시나리오 작성법 |
 
 ## ⚡ 가장 짧은 실행
@@ -159,6 +160,15 @@ ANTHROPIC_API_KEY
 
 - 로그는 Git 대신 Drive 공유 폴더(`유기농지능 > data`)에 저장
 - 파일명: {scenario_id}_{condition}_{rep번호}.json
+- 파일명에 사람 구분이 없다. **rep 번호를 사람마다 나눠서 돌린다** — 같은 번호를 두 사람이 돌리면 한쪽 데이터가 조용히 덮어써진다
+
+| 사람 | rep |
+|---|---|
+| 김유리 | 1~5 |
+| 이예영 | 6~10 |
+| 김유민 | 11~15 |
+
+- 수집 파라미터(모델 · `max_turns` · `n_solo` · 임계값)는 팀 노션의 **동결표**에 고정한다. 수집 도중에 바꾸면 앞뒤 데이터를 함께 분석할 수 없다
 
 ## 🌿 브랜치 규칙
 
