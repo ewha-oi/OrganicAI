@@ -175,24 +175,31 @@ def judge_key(api_keys: dict) -> str:
 
 
 def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
-                  judge_api_key: str) -> dict:
+                  judge_api_key: str, solo_values: list = None) -> dict:
     """
     단독/그룹 산출물을 채점한다.
     A1  : scoring.checklist 기반 결정론 채점 (API 호출 없음)
     A2/A4: LLM-judge 1~5점 (산출물 1개당 1회 호출)
 
     judge_api_key는 judge_key(api_keys)로 얻는다 (제공사에 따라 어느 키인지 달라진다).
+
+    solo_values: 이미 채점해 둔 단독 점수가 있으면 넘겨서 재사용한다.
+        명시/묵시는 같은 단독 산출물을 공유하는데, 조건마다 다시 채점하면
+        (1) judge 호출을 10회씩 두 번 내고 (2) 같은 글에 다른 등급이 나와
+        두 조건의 기준선이 어긋난다. 한 번 채점해 양쪽이 그대로 쓰는 것이 맞다.
     """
     task_type = scenario["task_type"]
     solo_texts = [o["output"] for o in solo_outputs]
 
     if task_type == "A1":
         checklist = scenario["scoring"]["checklist"]
-        solo_values = [score_a1(text, checklist) for text in solo_texts]
+        if solo_values is None:
+            solo_values = [score_a1(text, checklist) for text in solo_texts]
         group_value = score_a1(group_text, checklist)
     else:
-        solo_values = [score_a2_a4(text, judge_api_key, task_type)
-                       for text in solo_texts]
+        if solo_values is None:
+            solo_values = [score_a2_a4(text, judge_api_key, task_type)
+                           for text in solo_texts]
         group_value = score_a2_a4(group_text, judge_api_key, task_type)
 
     new_idea = detect_new_idea(solo_texts, group_text, judge_api_key)
@@ -207,13 +214,15 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
                  replicate: int = 1, n_solo: int = DEFAULT_SOLO_REPS,
                  max_turns: int = 10, thresholds: dict = THRESHOLDS,
                  out_dir=None, solo_outputs: list = None,
-                 verbose: bool = True) -> dict:
+                 solo_values: list = None, verbose: bool = True) -> dict:
     """
     시나리오 하나를 조건 하나로 끝까지 돌리고 판정 결과를 반환한다.
 
     api_keys : {"gemini": ..., "groq": ..., "anthropic": ...}
     solo_outputs: 이미 돌려둔 단독 산출물이 있으면 넘겨서 재사용한다
                   (같은 시나리오를 명시/묵시 두 조건으로 돌릴 때 비용이 절반이 된다)
+    solo_values : 이미 채점해 둔 단독 점수. 넘기면 judge 재호출을 건너뛴다.
+                  반환값의 'solo_values'로 나오므로 다음 조건에 그대로 넘기면 된다.
     out_dir  : 지정하면 태깅·채점이 끝난 로그를 JSON으로 저장한다
 
     반환값은 classify_log()의 결과에 'log'와 'solo_outputs'가 추가된 딕셔너리.
@@ -269,7 +278,8 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     # 4~5) 채점 + 부착
     step("채점")
     group_text = group_output_text(log)
-    scores = score_outputs(scenario, solo_outputs, group_text, jkey)
+    scores = score_outputs(scenario, solo_outputs, group_text, jkey,
+                           solo_values=solo_values)
     log["group_output_text"] = group_text
     log = attach_scores(log, scores["solo_values"], scores["group_value"],
                         scores["new_idea_flag"])
@@ -279,6 +289,8 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     result = classify_log(log, thresholds=thresholds)
     result["log"] = log
     result["solo_outputs"] = solo_outputs
+    # 다음 조건이 그대로 재사용한다 (judge 호출 10회 절약 + 기준선 일치)
+    result["solo_values"] = scores["solo_values"]
 
     if out_dir:
         result["log_path"] = save_log(log, out_dir)
@@ -292,17 +304,22 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
 def run_scenario_both_conditions(scenario_path, api_keys: dict, **kwargs) -> dict:
     """
     같은 시나리오를 명시/묵시 두 조건으로 돌린다.
-    단독 산출물은 한 번만 생성해 두 조건이 공유한다 (조건 간 비교의 기준선을 통일).
+
+    단독 산출물은 한 번만 생성하고, **채점 결과도 한 번만 내서** 두 조건이 공유한다.
+    조건마다 다시 채점하면 judge 호출을 10회씩 두 번 내는 데다, 같은 글에 다른
+    등급이 나와 "두 조건이 같은 기준선을 쓴다"는 전제가 실제로는 깨진다.
     """
     scenario = load_scenario(scenario_path)
     n_solo = kwargs.pop("n_solo", DEFAULT_SOLO_REPS)
     solo_outputs = run_solo_batch(scenario, api_keys, n_reps=n_solo)
 
-    return {
-        cond: run_scenario(scenario_path, cond, api_keys,
-                           solo_outputs=solo_outputs, **kwargs)
-        for cond in ("명시", "묵시")
-    }
+    results, solo_values = {}, kwargs.pop("solo_values", None)
+    for cond in ("명시", "묵시"):
+        results[cond] = run_scenario(scenario_path, cond, api_keys,
+                                     solo_outputs=solo_outputs,
+                                     solo_values=solo_values, **kwargs)
+        solo_values = results[cond]["solo_values"]   # 뒤 조건은 재채점하지 않는다
+    return results
 
 
 # ---------------------------------------------------------------------------
