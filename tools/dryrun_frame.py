@@ -9,7 +9,7 @@
 판정 프레임만 따로 시험할 수 있다. 시나리오 파일은 읽기만 하고 건드리지 않는다.
 
     python tools/dryrun_frame.py
-    python tools/dryrun_frame.py --scenario scenarios/A1/A1_simple_meeting.json
+    python tools/dryrun_frame.py --scenario scenarios/A1/A1_simple_meeting_room.json
 
 하는 일:
     [1] 시나리오 형식 점검      실행 전에 잡을 수 있는 JSON 오류
@@ -38,7 +38,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from coop_pipeline import classify_log, format_result, load_thresholds  # noqa: E402
 from coop_pipeline.thresholds import THRESHOLDS, THRESHOLDS_SOURCE  # noqa: E402
 
-DEFAULT_SCENARIO = "scenarios/A4/A4_simple_energy_campaign.json"
+DEFAULT_SCENARIO = "scenarios/A4/A4_simple_energy_save.json"
 
 # 모델 ID에서 계열을 알아내기 위한 키워드. self-preference 편향 점검에 쓴다.
 MODEL_FAMILIES = ("gemini", "gemma", "claude", "llama", "gpt", "qwen",

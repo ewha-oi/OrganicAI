@@ -95,7 +95,7 @@ A1(정보통합)은 정답이 존재하므로 **LLM 없이 코드로 결정론�
 
 ### 3-3. 채점 예시
 
-**짧은 키워드 (A1_simple_meeting)**
+**짧은 키워드 (A1_simple_meeting_room)**
 
 ```
 checklist = ["수요일", "19:00", "B실"]

@@ -1,7 +1,7 @@
 # 판정 프레임 시험하기
 
 돈을 쓰기 전에 판정 프레임이 제대로 도는지 확인하고, 그다음 파이프라인 전체를
-한 번 돌려보는 순서를 적는다. 예시는 `A4_simple_energy_campaign`을 쓴다.
+한 번 돌려보는 순서를 적는다. 예시는 `A4_simple_energy_save`을 쓴다.
 
 - 전체 실행 옵션과 결과 해석 → [PIPELINE.md](PIPELINE.md)
 - 채점 기준 → [RUBRIC.md](RUBRIC.md)
@@ -29,10 +29,10 @@
 ## 1. 판정 프레임만 시험하기 (API 호출 0회)
 
 ```bash
-python tools/dryrun_frame.py --scenario scenarios/A4/A4_simple_energy_campaign.json
+python tools/dryrun_frame.py --scenario scenarios/A4/A4_simple_energy_save.json
 ```
 
-인자를 생략하면 A4_simple_energy_campaign이 기본값이다. 네 가지를 순서대로 한다.
+인자를 생략하면 A4_simple_energy_save이 기본값이다. 네 가지를 순서대로 한다.
 
 | 단계 | 확인하는 것 |
 |---|---|
@@ -65,7 +65,7 @@ sys.path.insert(0, "src"); sys.path.insert(0, "tools")   # 레포 루트에서 �
 from dryrun_frame import make_log
 from coop_pipeline import classify_log, format_result
 
-log = make_log("A4_simple_energy_campaign", "A4",
+log = make_log("A4_simple_energy_save", "A4",
                n_turns=10,
                ref_ab=3, ref_ba=3,      # 참조 방향별 횟수  -> Q1, Q2
                comp=2,                  # comp 코드 턴 수    -> Q4a
@@ -87,7 +87,7 @@ A4는 LLM-judge 1~5 등급을 쓰고, Q3 통과 조건이 `grade_gap_min = 2`다
 
 > 단독 중앙값이 3점이면 **그룹이 5점(만점)이어야** Q3를 통과한다.
 
-`A4_simple_energy_campaign`은 제약이 뚜렷하다 (슬로건 12자, 아이디어 정확히 3개,
+`A4_simple_energy_save`은 제약이 뚜렷하다 (슬로건 12자, 아이디어 정확히 3개,
 무비용). judge 루브릭은 제약 위반 시 최대 3점으로 자른다. 단독·그룹이 나란히
 3점을 받으면 등급차 0 → **항상 L2**가 된다.
 
@@ -192,7 +192,7 @@ API_KEYS = {
 키를 쓰기 전에 §1을 Colab에서도 한 번 돌린다. 여기서 걸리면 돈이 안 든다.
 
 ```python
-!python tools/dryrun_frame.py --scenario scenarios/A4/A4_simple_energy_campaign.json
+!python tools/dryrun_frame.py --scenario scenarios/A4/A4_simple_energy_save.json
 ```
 
 ### 3-4. 셀 3 — 모델 ID 확인 ⚠️
@@ -249,7 +249,7 @@ os.environ["COOP_BETA_MODEL"]  = "실제 되는 ID"
 from coop_pipeline.runner import run_scenario
 
 result = run_scenario(
-    "scenarios/A4/A4_simple_energy_campaign.json",
+    "scenarios/A4/A4_simple_energy_save.json",
     condition="명시",
     api_keys=API_KEYS,
     n_solo=2,          # 정식은 5
@@ -264,11 +264,11 @@ Gemini/Groq는 무료 티어로 충분하다.
 단계별 진행이 출력되므로 **어디서 멈췄는지가 바로 보인다.**
 
 ```
-[A4_simple_energy_campaign/명시] 단독 조건 실행 (2 에이전트 x 2회)
-[A4_simple_energy_campaign/명시] 2-agent 대화 실행 (4턴)
-[A4_simple_energy_campaign/명시] 발화 태깅
-[A4_simple_energy_campaign/명시] 채점
-[A4_simple_energy_campaign/명시] 판정
+[A4_simple_energy_save/명시] 단독 조건 실행 (2 에이전트 x 2회)
+[A4_simple_energy_save/명시] 2-agent 대화 실행 (4턴)
+[A4_simple_energy_save/명시] 발화 태깅
+[A4_simple_energy_save/명시] 채점
+[A4_simple_energy_save/명시] 판정
 ```
 
 ### 3-6. 셀 5 — 중간 산출물을 눈으로 볼 것
@@ -325,7 +325,7 @@ print("병목:", result["stopped_at"])
 from coop_pipeline.runner import run_scenario_both_conditions
 
 results = run_scenario_both_conditions(
-    "scenarios/A4/A4_simple_energy_campaign.json",
+    "scenarios/A4/A4_simple_energy_save.json",
     api_keys=API_KEYS, n_solo=5, max_turns=10, out_dir="runs",
 )
 print(results["명시"]["level"], results["묵시"]["level"])
