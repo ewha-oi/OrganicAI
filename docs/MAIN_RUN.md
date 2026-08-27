@@ -50,7 +50,7 @@
 | 1 | `%cd /content/OrganicAI` | |
 | 2 | `from google.colab import userdata` | |
 | 3 | `# 모델 배정. coop_pipeline 을 임포트하는 어떤 셀보다 먼저 실행한다` | |
-| 4 | `# ★ 담당자가 고치는 셀은 여기 하나뿐이다 — 아래 셀들은 그대로 둔다.` | 한 번 고쳤으면 실행만 |
+| 4 | `# 담당자가 고치는 셀은 여기 하나뿐이다 — 아래 셀들은 그대로 둔다.` | 한 번 고쳤으면 실행만 |
 | 5 | `# alpha 대체 어댑터 — 런타임을 재시작하면 사라진다. 수집 전에 반드시 실행할 것.` | **매번 필요** |
 | 6 | `# 본수집 루프 — 이 셀은 고치지 않는다. 바꿀 값은 전부 1절 설정 셀에 있다.` | 다음 배치 |
 | 7 | `# 수집 현황 + 전체 판정. API 호출 0, 무료.` | 확인 |
@@ -167,8 +167,12 @@
 
 ## 6. 데이터는 어디에 쌓이나
 
-`/content/drive/MyDrive/OrganicAI_main` — **세 사람이 같은 폴더를 쓴다.** 파일럿 로그와
-섞이면 안 되므로 본실험은 별도 폴더다.
+팀 공유 폴더 **「유기농지능 > data」** 에 쌓인다. Colab 경로로는
+`/content/drive/MyDrive/유기농지능/data`.
+
+- **세 사람이 같은 폴더를 쓴다.** 그래야 현황 확인 셀에서 전체가 한 번에 보인다
+- **폴더를 손으로 만들 필요는 없다.** 수집 셀이 없으면 알아서 만든다
+- 담당 시나리오가 겹치지 않으면 파일명도 겹치지 않으므로, 같은 폴더에 쌓아도 안전하다
 
 저장은 루프 끝이 아니라 **각 단계 직후**에 일어난다.
 
@@ -180,15 +184,20 @@
 `raw/`에 먼저 쓰는 것은 대화가 가장 비싼 단계라 뒤에서 실패해도 잃지 않기 위해서다.
 
 ```
-OrganicAI_main/
-├── raw/                                   ← 태깅 전 원본
-│   ├── A1_complex_gas_alarm_명시_1.json
-│   └── A1_complex_gas_alarm_묵시_1.json
-├── A1_complex_gas_alarm_명시_1.json        ← 완성본 (판정까지)
-└── A1_complex_gas_alarm_묵시_1.json
+유기농지능/
+└── data/
+    ├── raw/                                   ← 태깅 전 원본
+    │   ├── A1_complex_gas_alarm_명시_1.json
+    │   └── A1_complex_gas_alarm_묵시_1.json
+    ├── A1_complex_gas_alarm_명시_1.json        ← 완성본 (판정까지)
+    └── A1_complex_gas_alarm_묵시_1.json
 ```
 
 시나리오 1개 × rep 1회 = **파일 4개**.
+
+> `data` 폴더에 파일럿 때 모은 로그가 이미 있다면, 파일명 규칙
+> (`{scenario_id}_{condition}_{rep}.json`)이 같아서 현황 확인 셀에 함께 잡힌다.
+> 본실험 것과 구분해야 하면 파일럿 로그를 하위 폴더로 옮겨두고 시작할 것.
 
 ---
 
@@ -203,7 +212,7 @@ OrganicAI_main/
 | beta | `openai/gpt-oss-20b` | 모델 배정 셀 |
 | `MAX_TURNS` | 10 | 설정 셀 |
 | `N_SOLO` | 5 | 설정 셀 |
-| `OUT_DIR` | `/content/drive/MyDrive/OrganicAI_main` | 설정 셀 |
+| `OUT_DIR` | `/content/drive/MyDrive/유기농지능/data` | 설정 셀 |
 
 특히 **judge가 다르면 태깅이 달라져 Kappa 비교가 무효가 된다.**
 
