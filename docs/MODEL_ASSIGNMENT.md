@@ -247,7 +247,7 @@ from coop_pipeline.runner import load_scenario
 # 하드코딩하지 말 것. 1절의 COOP_BETA_MODEL 이 유일한 출처다.
 BETA_CANDIDATE = llm.MODELS["beta"]
 
-v = load_scenario("scenarios/A4/A4_simple_energy_campaign.json")["task_variants"]
+v = load_scenario("scenarios/A4/A4_simple_energy_save.json")["task_variants"]
 prompt = agents.SYSTEM_PROMPT_TEMPLATES["명시"].format(
     name="beta", partner="alpha", task=v.get("beta") or v["shared"]
 ) + "\n\n지금까지의 대화:\n(없음)\n\n너의 다음 발언:"

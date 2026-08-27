@@ -68,7 +68,7 @@ from coop_pipeline.runner import check_scenario_dir, run_scenario
 check_scenario_dir("scenarios")          # 형식 점검 (API 호출 없음)
 
 result = run_scenario(
-    "scenarios/A1/A1_simple_meeting.json",
+    "scenarios/A1/A1_simple_meeting_room.json",
     condition="명시",
     api_keys={"gemini": ..., "groq": ..., "anthropic": ...},
     out_dir=DATA_DIR,

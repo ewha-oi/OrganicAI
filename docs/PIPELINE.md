@@ -13,7 +13,7 @@
 ## 0. 파이프라인이 하는 일
 
 ```
-scenarios/A1_simple_meeting.json
+scenarios/A1_simple_meeting_room.json
         │
         ├─ (1) 단독 조건 실행      gemini x5, llama x5     → solo 산출물 10개
         ├─ (2) 2-agent 대화 실행   alpha=gemini, beta=llama → turns + final_output
@@ -75,7 +75,7 @@ check_scenario_dir("scenarios")
 ```
 
 ```
-OK   scenarios\A1\A1_simple_meeting.json
+OK   scenarios\A1\A1_simple_meeting_room.json
 ...
 결과: 7개 통과 / 0개 오류
 ```
@@ -129,7 +129,7 @@ print(MODELS)
 from coop_pipeline.runner import run_scenario
 
 result = run_scenario(
-    "scenarios/A1/A1_simple_meeting.json",
+    "scenarios/A1/A1_simple_meeting_room.json",
     condition="명시",              # "명시" 또는 "묵시"
     api_keys=API_KEYS,
     replicate=1,
@@ -150,7 +150,7 @@ result = run_scenario(
 from coop_pipeline.runner import run_scenario_both_conditions
 
 results = run_scenario_both_conditions(
-    "scenarios/A1/A1_simple_meeting.json",
+    "scenarios/A1/A1_simple_meeting_room.json",
     api_keys=API_KEYS, n_solo=5, out_dir=DATA_DIR,
 )
 print(results["명시"]["level"], results["묵시"]["level"])
@@ -204,7 +204,7 @@ from coop_pipeline.scoring import attach_scores
 from coop_pipeline import classify_log, format_result
 
 log = json.load(open(f"{DATA_DIR}/raw/A1_simple_meeting_명시_1.json", encoding="utf-8"))
-scenario = load_scenario("scenarios/A1/A1_simple_meeting.json")
+scenario = load_scenario("scenarios/A1/A1_simple_meeting_room.json")
 
 log = tag_log(log, api_key=API_KEYS["anthropic"])
 solo = run_solo_batch(scenario, API_KEYS, n_reps=5)
@@ -252,7 +252,7 @@ print(format_result(result))
 
 ```
 ==============================================================
-시나리오 : A1_simple_meeting (A1)
+시나리오 : A1_simple_meeting_room (A1)
 조건     : 명시 / rep 1
 판정     : L2 — 상호 참조 — 주고받았으나 단독 조건보다 나은 산출물을 내지 못함
 이유     : 쌍방향 참조는 있으나 집단 우위 미충족 (그룹=1.000, 단독 p90=1.000 (단독 n=10))
@@ -332,7 +332,7 @@ from coop_pipeline.tagging import tag_log
 from coop_pipeline.scoring import attach_scores
 from coop_pipeline import classify_log, format_result
 
-scenario = load_scenario("scenarios/A1/A1_simple_meeting.json")
+scenario = load_scenario("scenarios/A1/A1_simple_meeting_room.json")
 
 # (1) 단독
 solo = run_solo_batch(scenario, API_KEYS, n_reps=5)
