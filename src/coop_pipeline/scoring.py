@@ -11,6 +11,7 @@ A2/A4(의견수렴/창의생성): LLM-judge 등급 평가(1~5점, 블라인드)
 이 파일은 그 문서를 코드로 옮긴 것이므로, 기준을 바꿀 때는 문서를 먼저 고칠 것.
 """
 
+import os
 import re
 import unicodedata
 
@@ -224,6 +225,28 @@ B에 A 중 어느 것에도 없던 해결책 요소가 포함되어 있습니까
 {"new_idea": true 또는 false, "reason": "..."}
 """
 
+# new_idea 판정은 단독 산출물 10개와 그룹 산출물을 한 요청에 넣는다. 생성 모델이
+# 장문으로 답하면 이 단계만 2만 자 이상이 되어 judge의 단일 요청 TPM을 넘는다.
+# 각 산출물의 시작(제안)과 끝(결론)을 보존한 결정론적 발췌로 요청을 제한한다.
+# 모든 담당자가 같은 값을 써야 하므로 환경변수는 임포트 전에만 바꿀 것.
+NEW_IDEA_SOLO_CHARS = int(os.environ.get("COOP_NEW_IDEA_SOLO_CHARS", 550))
+NEW_IDEA_GROUP_CHARS = int(os.environ.get("COOP_NEW_IDEA_GROUP_CHARS", 1500))
+_OMISSION_MARK = "\n[중략]\n"
+
+
+def _new_idea_excerpt(text: str, limit: int) -> str:
+    """신규성 비교용으로 앞부분과 결론을 남긴 제한 길이 발췌를 만든다."""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    if limit <= len(_OMISSION_MARK):
+        return text[:limit]
+
+    available = limit - len(_OMISSION_MARK)
+    head = (available * 2) // 3
+    tail = available - head
+    return text[:head] + _OMISSION_MARK + text[-tail:]
+
 
 def detect_new_idea(solo_outputs: list, group_output: str, api_key: str,
                     model: str = None, provider: str = None) -> bool:
@@ -234,12 +257,20 @@ def detect_new_idea(solo_outputs: list, group_output: str, api_key: str,
 
 def detect_new_idea_detail(solo_outputs: list, group_output: str, api_key: str,
                            model: str = None, provider: str = None) -> dict:
-    """detect_new_idea와 동일하되 judge가 쓴 근거까지 반환한다."""
+    """detect_new_idea와 동일하되 judge가 쓴 근거까지 반환한다.
+
+    이 호출은 10개 단독 산출물을 한 번에 비교하므로, 원문 로그는 보존하되 judge에는
+    고정 길이 발췌만 보낸다. 기본값 기준 사용자 프롬프트는 약 7,100자 이하가 된다.
+    """
     client = make_judge(api_key, provider=provider, model=model)
-    solo_text = "\n---\n".join(anonymize_output(o) for o in solo_outputs)
+    solo_text = "\n---\n".join(
+        _new_idea_excerpt(anonymize_output(output), NEW_IDEA_SOLO_CHARS)
+        for output in solo_outputs
+    )
     prompt = (
         f"(A) 단독 산출물들:\n{solo_text}\n\n"
-        f"(B) 협의 산출물:\n{anonymize_output(group_output)}"
+        f"(B) 협의 산출물:\n"
+        f"{_new_idea_excerpt(anonymize_output(group_output), NEW_IDEA_GROUP_CHARS)}"
     )
     parsed = call_judge_json(
         client,

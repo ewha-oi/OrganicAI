@@ -102,6 +102,23 @@ MAX_RETRIES = 3
 RETRY_BASE_SLEEP = 2.0  # 초. 재시도마다 배수로 늘어난다.
 
 
+def _is_request_too_large(exc: Exception) -> bool:
+    """제공사 SDK마다 다른 413 표기를 한 곳에서 판별한다."""
+    current = exc
+    # 호출부가 원인을 설명하기 위해 LLMCallError로 감싼 경우에도 413을 놓치지
+    # 않아야 같은 큰 요청을 다시 보내지 않는다.
+    while current is not None:
+        if getattr(current, "status_code", None) == 413:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_daily_token_limit(exc: Exception) -> bool:
+    """Groq의 TPD 429은 짧은 재시도로 회복되지 않는다."""
+    return "tokens per day" in str(exc).lower()
+
+
 # ---------------------------------------------------------------------------
 # JSON 파싱
 # ---------------------------------------------------------------------------
@@ -136,13 +153,19 @@ def parse_json_strict(raw: str) -> dict:
 # 재시도
 # ---------------------------------------------------------------------------
 def with_retry(fn, what: str = "LLM 호출"):
-    """fn()을 최대 MAX_RETRIES회 시도한다. 전부 실패하면 LLMCallError."""
+    """fn()을 최대 MAX_RETRIES회 시도한다. 413은 같은 요청을 반복하지 않는다."""
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             return fn()
         except Exception as exc:  # API 예외 종류가 SDK마다 달라 광범위하게 잡는다
             last_error = exc
+            # 413은 현재 요청 자체가 한도를 넘었다는 뜻이다. 대기하거나 그대로
+            # 재시도해도 성공하지 않으므로, 호출부가 예산을 낮추지 않는 한 즉시 멈춘다.
+            if _is_request_too_large(exc):
+                raise LLMCallError(f"{what}: 요청이 모델 한도를 넘음: {exc}") from exc
+            if _is_daily_token_limit(exc):
+                raise LLMCallError(f"{what}: 일일 토큰 한도(TPD)에 도달: {exc}") from exc
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BASE_SLEEP * attempt)
     raise LLMCallError(f"{what} {MAX_RETRIES}회 모두 실패: {last_error}") from last_error
@@ -160,15 +183,19 @@ def with_retry(fn, what: str = "LLM 호출"):
 # 잘려 파싱이 실패한다. 제공사를 가리지 않는 함정이므로 하한을 공통으로 둔다
 # (Gemini 2.5 계열, Groq의 gpt-oss/qwen3 계열에서 모두 확인됨).
 #
-# 값을 4096 -> 1024로 낮췄다. 제공사는 max_tokens를 '예약량'으로 일일 한도(TPD)에
+# 값을 4096 -> 512로 낮췄다. 제공사는 max_tokens를 '예약량'으로 일일 한도(TPD)에
 # 미리 청구하므로, 실제로는 수십 토큰짜리 JSON을 받으면서 4096을 매번 다 낸다.
 # judge 호출 1회가 5,200토큰씩 나가 TPD 200,000이 시나리오 한 개에 소진됐다.
 # 지금 judge는 reasoning_effort를 none/low로 보내므로 추론 토큰이 거의 없고,
-# 태깅/채점 응답은 JSON 몇십 토큰이라 1024로 충분하다.
+# qwen은 reasoning_effort=none으로 호출하므로 태깅/채점의 짧은 JSON에는 512면 충분하다.
 #
 # 되돌려야 하는 신호: "응답을 JSON으로 해석할 수 없음" 또는 빈 응답 에러가 반복되면
 # 출력이 중간에 잘린 것이다. 그때는 이 값을 올린다 (조용히 틀리지 않고 에러로 드러난다).
-_MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 1024))
+_MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 512))
+
+# JSON 태깅/채점은 매우 짧은 응답만 필요하다. 요청 전체가 TPM 한도를 넘을 때만
+# 512 -> 256으로 한 번 낮춘다. 정상 요청의 출력 품질과 기존 실험 설정은 유지한다.
+_MIN_GROQ_JUDGE_TOKENS = 256
 
 # reasoning_effort를 받는 Groq 모델과, 그 모델이 받아들이는 값.
 # **값이 계열마다 다르다.** 틀린 값을 보내면 400이므로 하나로 뭉뚱그릴 수 없다.
@@ -207,7 +234,12 @@ class JudgeClient:
         def _once():
             return parse_json_strict(caller(system, user, max_tokens, model_id))
 
-        return with_retry(_once, what=f"judge 호출({self.provider}:{model_id})")
+        output_budget = max(max_tokens, _MIN_OUTPUT_TOKENS)
+        details = (
+            f"judge 호출({self.provider}:{model_id}; system={len(system)}자, "
+            f"user={len(user)}자, output={output_budget})"
+        )
+        return with_retry(_once, what=details)
 
     # -- 제공사별 구현 -------------------------------------------------------
     def _call_anthropic(self, system, user, max_tokens, model_id):
@@ -221,19 +253,35 @@ class JudgeClient:
         # OpenAI 호환 인터페이스. response_format으로 JSON을 강제한다
         # (프롬프트에 'JSON'이라는 단어가 있어야 이 옵션이 동작한다 —
         #  CODING_MANUAL / JUDGE_RUBRIC 모두 조건을 만족한다).
-        kwargs = dict(
-            model=model_id, max_tokens=max(max_tokens, _MIN_OUTPUT_TOKENS),
-            temperature=0,
-            response_format={"type": "json_object"},
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-        )
-        for tag, effort in _GROQ_REASONING_EFFORT.items():
-            if tag in model_id:
-                kwargs["reasoning_effort"] = effort
+        budget = max(max_tokens, _MIN_OUTPUT_TOKENS)
+        min_budget = min(budget, _MIN_GROQ_JUDGE_TOKENS)
+        while True:
+            kwargs = dict(
+                model=model_id, max_tokens=budget,
+                temperature=0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+            )
+            for tag, effort in _GROQ_REASONING_EFFORT.items():
+                if tag in model_id:
+                    kwargs["reasoning_effort"] = effort
+                    break
+            try:
+                response = self.client.chat.completions.create(**kwargs)
                 break
+            except Exception as exc:
+                if _is_request_too_large(exc) and budget > min_budget:
+                    budget = min_budget
+                    continue
+                if _is_request_too_large(exc):
+                    raise LLMCallError(
+                        f"groq judge({model_id}) 요청이 여전히 너무 큼 "
+                        f"(system={len(system)}자, user={len(user)}자, "
+                        f"max_tokens={budget})"
+                    ) from exc
+                raise
 
-        response = self.client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content
         if not content:
             # 추론만 하고 본문을 못 낸 경우. 조용히 넘기면 파싱 단계에서

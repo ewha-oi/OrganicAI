@@ -11,6 +11,7 @@ validate_log()를 통과할 수 있는 완전한 로그가 된다.
 모델 ID는 llm.MODELS에서 관리한다. 이 파일에 하드코딩하지 말 것.
 """
 
+import os
 import time
 
 from .llm import MODELS, LLMCallError, with_retry
@@ -64,6 +65,11 @@ MAX_TURNS = 10
 TEMPERATURE = 0.7          # 생성 다양성. replicate 간 변동을 만드는 값.
 RATE_LIMIT_SLEEP = 1.0     # 턴 사이 대기 (초)
 
+# beta도 대화 이력과 태깅 프롬프트에 그대로 들어가므로, SDK의 큰 기본 출력
+# 한도에 맡기지 않는다. gpt-oss-20b의 low 추론 + 1024는 기존 실측을 보존하면서
+# 장문 한 발화가 judge의 TPM을 넘기는 경로를 막는다.
+BETA_MAX_TOKENS = int(os.environ.get("COOP_BETA_MAX_TOKENS", 1024))
+
 VALID_CONDITIONS = ("명시", "묵시")
 
 
@@ -99,14 +105,20 @@ def _call_gemini(model, prompt: str) -> str:
 
 
 def _call_llama(client, prompt: str, model_id: str = None) -> str:
+    selected_model = model_id or MODELS["beta"]
+
     def _once():
-        response = client.chat.completions.create(
-            model=model_id or MODELS["beta"],
+        kwargs = dict(
+            model=selected_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=TEMPERATURE,
+            max_tokens=BETA_MAX_TOKENS,
         )
+        if "gpt-oss" in selected_model:
+            kwargs["reasoning_effort"] = "low"
+        response = client.chat.completions.create(**kwargs)
         return _require_text(response.choices[0].message.content,
-                             f"beta({model_id or MODELS['beta']})")
+                             f"beta({selected_model})")
     return with_retry(_once, what="llama 호출")
 
 

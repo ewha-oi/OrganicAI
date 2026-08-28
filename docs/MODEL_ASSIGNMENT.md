@@ -99,11 +99,10 @@ alpha와 beta가 같은 계열인 것은 두 에이전트를 서로 비교하지
 
 ### 3-4. beta 호출 경로 점검 (§4 `[2]`)
 
-`agents._call_llama`(`agents.py:83`)는 `max_tokens`도 `reasoning_effort`도 보내지 않는다.
-`gpt-oss`는 추론 모델이라 alpha에서 실제로 겪은 것처럼 **빈 응답**이 올 수 있어서, 추측하지 않고
-실제 호출 경로에 그대로 태워 확인했다 → **OK (346자 / 1.8초)**. 그래서 `src` 수정 없이 beta로 썼다.
+`agents._call_llama`은 `max_tokens=1024`와 gpt-oss의 `reasoning_effort="low"`를 보낸다.
+beta 발화도 이후 대화 이력과 judge 프롬프트에 들어가므로 SDK 기본 출력 한도에 맡기지 않는다.
 
-반대로 alpha는 같은 문제에 걸렸다. 그래서 노트북 3절의 shim이 `max_tokens=4096`과
+반대로 alpha는 같은 문제에 걸렸다. 그래서 노트북 3절의 shim이 `max_tokens=1024`에서 시작해 413이면 낮추고,
 `reasoning_effort`를 붙이고, `<think>` 블록을 지운 뒤 텍스트를 넘긴다. 어떤 추론 옵션을 받는지는
 모델마다 다르고 틀리면 400이므로 shim이 **런타임에 하나씩 시도해서** 통과하는 조합을 고른다.
 
@@ -235,10 +234,8 @@ for model_id, effort in CANDIDATES.items():
 ### `[2]` beta 호출 경로 점검
 
 ```python
-# agents._call_llama 는 max_tokens 도 reasoning_effort 도 보내지 않는다.
-# 추측하지 말고 실제 호출 경로를 그대로 태워서 확인한다.
-#   OK 가 뜨면  -> beta 는 코드 수정 없이 쓸 수 있다.
-#   실패하면    -> _call_llama 에 추론 옵션을 넣는 src 수정이 필요하다.
+# agents._call_llama 는 beta의 max_tokens=1024와 gpt-oss reasoning_effort="low"를 보낸다.
+# 실제 호출 경로를 그대로 태워 결과가 비어 있지 않은지 확인한다.
 import time
 from groq import Groq
 from coop_pipeline import agents, llm
