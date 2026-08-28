@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
 from coop_pipeline import classify_log, load_thresholds
 from coop_pipeline.scoring import normalize, score_a1
+from coop_pipeline import scoring
 from coop_pipeline.validate_log import LogValidationError, validate_log
 from coop_pipeline import agents, llm
 
@@ -320,3 +321,25 @@ def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
     assert agents._call_llama(client, "prompt", model_id="openai/gpt-oss-20b")
     assert calls[0]["max_tokens"] == 1024
     assert calls[0]["reasoning_effort"] == "low"
+
+
+def test_new_idea_prompt_is_bounded_but_keeps_each_output_ends(monkeypatch):
+    captured = {}
+
+    def fake_call(_client, system, user, max_tokens):
+        captured.update(system=system, user=user, max_tokens=max_tokens)
+        return {"new_idea": False, "reason": ""}
+
+    monkeypatch.setattr(scoring, "make_judge", lambda *args, **kwargs: object())
+    monkeypatch.setattr(scoring, "call_judge_json", fake_call)
+    monkeypatch.setattr(scoring, "NEW_IDEA_SOLO_CHARS", 50)
+    monkeypatch.setattr(scoring, "NEW_IDEA_GROUP_CHARS", 100)
+
+    solos = [f"start-{i}-" + "x" * 200 + f"-end-{i}" for i in range(10)]
+    group = "group-start-" + "y" * 300 + "-group-end"
+    result = scoring.detect_new_idea_detail(solos, group, "key")
+
+    assert result["new_idea"] is False
+    assert len(captured["user"]) <= 10 * 50 + 100 + 100
+    assert "start-0-" in captured["user"] and "-end-0" in captured["user"]
+    assert "group-start-" in captured["user"] and "-group-end" in captured["user"]
