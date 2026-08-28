@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 from coop_pipeline import classify_log, load_thresholds
 from coop_pipeline.scoring import normalize, score_a1
 from coop_pipeline.validate_log import LogValidationError, validate_log
+from coop_pipeline import agents, llm
 
 
 def make_base_log(**overrides):
@@ -237,3 +238,85 @@ def test_threshold_change_can_flip_the_verdict():
     # 2회로 내리면 Q2를 통과해 더 높은 층위로 올라간다
     loose = dict(load_thresholds("v1"), bidirectional_min=2)
     assert classify_log(log, thresholds=loose)["level"] != "L1"
+
+
+# ---------------------------------------------------------------------------
+# 요청 예산 / 413 처리
+# ---------------------------------------------------------------------------
+class _TooLarge(Exception):
+    status_code = 413
+
+
+class _Message:
+    content = '{"codes": [], "reference": null, "evidence": {}}'
+
+
+class _Completion:
+    choices = [type("Choice", (), {"message": _Message()})()]
+
+
+class _JudgeCompletions:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise _TooLarge("too large")
+        return _Completion()
+
+
+def test_groq_judge_lowers_output_budget_once_on_413(monkeypatch):
+    monkeypatch.setattr(llm, "_MIN_OUTPUT_TOKENS", 1024)
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": _JudgeCompletions()})()})()
+    judge = llm.JudgeClient("groq", client, "qwen/qwen3.6-27b")
+
+    assert judge.json("system", "user") == {"codes": [], "reference": None, "evidence": {}}
+    assert [call["max_tokens"] for call in client.chat.completions.calls] == [1024, 512]
+
+
+def test_413_is_not_retried():
+    calls = 0
+
+    def always_too_large():
+        nonlocal calls
+        calls += 1
+        raise _TooLarge("too large")
+
+    with pytest.raises(llm.LLMCallError, match="모델 한도를 넘음"):
+        llm.with_retry(always_too_large, what="test")
+    assert calls == 1
+
+
+def test_judge_stops_after_its_single_budget_fallback():
+    class Completions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            raise _TooLarge("too large")
+
+    completions = Completions()
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": completions})()})()
+    judge = llm.JudgeClient("groq", client, "qwen/qwen3.6-27b")
+
+    with pytest.raises(llm.LLMCallError, match="user=4자"):
+        judge.json("system", "user")
+    assert [call["max_tokens"] for call in completions.calls] == [1024, 512]
+
+
+def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return _Completion()
+
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": Completions()})()})()
+    monkeypatch.setattr(agents, "BETA_MAX_TOKENS", 1024)
+
+    assert agents._call_llama(client, "prompt", model_id="openai/gpt-oss-20b")
+    assert calls[0]["max_tokens"] == 1024
+    assert calls[0]["reasoning_effort"] == "low"
