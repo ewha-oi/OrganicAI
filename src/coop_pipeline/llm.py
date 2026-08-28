@@ -114,6 +114,11 @@ def _is_request_too_large(exc: Exception) -> bool:
     return False
 
 
+def _is_daily_token_limit(exc: Exception) -> bool:
+    """Groq의 TPD 429은 짧은 재시도로 회복되지 않는다."""
+    return "tokens per day" in str(exc).lower()
+
+
 # ---------------------------------------------------------------------------
 # JSON 파싱
 # ---------------------------------------------------------------------------
@@ -159,6 +164,8 @@ def with_retry(fn, what: str = "LLM 호출"):
             # 재시도해도 성공하지 않으므로, 호출부가 예산을 낮추지 않는 한 즉시 멈춘다.
             if _is_request_too_large(exc):
                 raise LLMCallError(f"{what}: 요청이 모델 한도를 넘음: {exc}") from exc
+            if _is_daily_token_limit(exc):
+                raise LLMCallError(f"{what}: 일일 토큰 한도(TPD)에 도달: {exc}") from exc
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BASE_SLEEP * attempt)
     raise LLMCallError(f"{what} {MAX_RETRIES}회 모두 실패: {last_error}") from last_error
@@ -176,19 +183,19 @@ def with_retry(fn, what: str = "LLM 호출"):
 # 잘려 파싱이 실패한다. 제공사를 가리지 않는 함정이므로 하한을 공통으로 둔다
 # (Gemini 2.5 계열, Groq의 gpt-oss/qwen3 계열에서 모두 확인됨).
 #
-# 값을 4096 -> 1024로 낮췄다. 제공사는 max_tokens를 '예약량'으로 일일 한도(TPD)에
+# 값을 4096 -> 512로 낮췄다. 제공사는 max_tokens를 '예약량'으로 일일 한도(TPD)에
 # 미리 청구하므로, 실제로는 수십 토큰짜리 JSON을 받으면서 4096을 매번 다 낸다.
 # judge 호출 1회가 5,200토큰씩 나가 TPD 200,000이 시나리오 한 개에 소진됐다.
 # 지금 judge는 reasoning_effort를 none/low로 보내므로 추론 토큰이 거의 없고,
-# 태깅/채점 응답은 JSON 몇십 토큰이라 1024로 충분하다.
+# qwen은 reasoning_effort=none으로 호출하므로 태깅/채점의 짧은 JSON에는 512면 충분하다.
 #
 # 되돌려야 하는 신호: "응답을 JSON으로 해석할 수 없음" 또는 빈 응답 에러가 반복되면
 # 출력이 중간에 잘린 것이다. 그때는 이 값을 올린다 (조용히 틀리지 않고 에러로 드러난다).
-_MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 1024))
+_MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 512))
 
 # JSON 태깅/채점은 매우 짧은 응답만 필요하다. 요청 전체가 TPM 한도를 넘을 때만
-# 1024 -> 512로 한 번 낮춘다. 정상 요청의 출력 품질과 기존 실험 설정은 유지한다.
-_MIN_GROQ_JUDGE_TOKENS = 512
+# 512 -> 256으로 한 번 낮춘다. 정상 요청의 출력 품질과 기존 실험 설정은 유지한다.
+_MIN_GROQ_JUDGE_TOKENS = 256
 
 # reasoning_effort를 받는 Groq 모델과, 그 모델이 받아들이는 값.
 # **값이 계열마다 다르다.** 틀린 값을 보내면 400이므로 하나로 뭉뚱그릴 수 없다.

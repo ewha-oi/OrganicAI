@@ -102,7 +102,7 @@ alpha와 beta가 같은 계열인 것은 두 에이전트를 서로 비교하지
 `agents._call_llama`은 `max_tokens=1024`와 gpt-oss의 `reasoning_effort="low"`를 보낸다.
 beta 발화도 이후 대화 이력과 judge 프롬프트에 들어가므로 SDK 기본 출력 한도에 맡기지 않는다.
 
-반대로 alpha는 같은 문제에 걸렸다. 그래서 노트북 3절의 shim이 `max_tokens=2048`에서 시작해 413이면 낮추고,
+반대로 alpha는 같은 문제에 걸렸다. 그래서 노트북 3절의 shim이 `max_tokens=1024`에서 시작해 413이면 낮추고,
 `reasoning_effort`를 붙이고, `<think>` 블록을 지운 뒤 텍스트를 넘긴다. 어떤 추론 옵션을 받는지는
 모델마다 다르고 틀리면 400이므로 shim이 **런타임에 하나씩 시도해서** 통과하는 조합을 고른다.
 

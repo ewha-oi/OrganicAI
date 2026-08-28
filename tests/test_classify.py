@@ -273,7 +273,7 @@ def test_groq_judge_lowers_output_budget_once_on_413(monkeypatch):
     judge = llm.JudgeClient("groq", client, "qwen/qwen3.6-27b")
 
     assert judge.json("system", "user") == {"codes": [], "reference": None, "evidence": {}}
-    assert [call["max_tokens"] for call in client.chat.completions.calls] == [1024, 512]
+    assert [call["max_tokens"] for call in client.chat.completions.calls] == [1024, 256]
 
 
 def test_413_is_not_retried():
@@ -286,6 +286,19 @@ def test_413_is_not_retried():
 
     with pytest.raises(llm.LLMCallError, match="모델 한도를 넘음"):
         llm.with_retry(always_too_large, what="test")
+    assert calls == 1
+
+
+def test_tpd_429_is_not_retried():
+    calls = 0
+
+    def daily_limit():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("tokens per day (TPD): Limit 200000")
+
+    with pytest.raises(llm.LLMCallError, match="일일 토큰 한도"):
+        llm.with_retry(daily_limit, what="test")
     assert calls == 1
 
 
@@ -304,7 +317,7 @@ def test_judge_stops_after_its_single_budget_fallback():
 
     with pytest.raises(llm.LLMCallError, match="user=4자"):
         judge.json("system", "user")
-    assert [call["max_tokens"] for call in completions.calls] == [1024, 512]
+    assert [call["max_tokens"] for call in completions.calls] == [512, 256]
 
 
 def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
