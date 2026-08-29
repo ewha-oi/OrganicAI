@@ -183,21 +183,27 @@ print(f"완료: {len(all_results)}건")
 
 ### 3-4. 중간에 실패했을 때 — 이어서 돌리기
 
-`out_dir`을 주면 **태깅 전에 원본 대화 로그를 `{out_dir}/raw/`에 먼저 저장한다.**
-대화 실행이 가장 비싼 단계이므로, 뒤에서 실패해도 그 결과를 잃지 않게 하기 위해서다.
+`out_dir`을 주면 **비싼 산출물을 뒤 단계가 실패해도 잃지 않도록 먼저 저장한다.**
+단독 산출물 원문은 `{out_dir}/solo/`에, 태깅 전 원본 대화 로그는 `{out_dir}/raw/`에 남는다.
 
 ```
 DATA_DIR/
+├── solo/                                   ← 단독 산출물 원문 + 채점값 (명시/묵시 공유)
+│   └── A1_simple_meeting_solo_1.json
 ├── raw/                                    ← 대화만 끝난 상태 (codes/ref 없음)
 │   └── A1_simple_meeting_명시_1.json
 └── A1_simple_meeting_명시_1.json           ← 태깅·채점까지 끝난 완성본
 ```
 
-태깅부터 이어서 돌리려면:
+`solo/` 파일은 인간 채점자의 검증 자료이기도 하다. 완성 로그에는 단독 조건의
+**점수만** 남는데, "그룹이 정말 단독보다 나았는가"(Q3)와 "정말 새로운
+아이디어였는가"(Q4b)를 사람이 확인하려면 비교 대상인 단독 **원문**이 필요하다.
+
+태깅부터 이어서 돌리려면 (저장된 단독 산출물을 재사용하면 단독 10회 + judge 10회가 절약된다):
 
 ```python
 import json
-from coop_pipeline.runner import load_scenario, run_solo_batch, score_outputs, save_log
+from coop_pipeline.runner import load_scenario, load_solo_outputs, score_outputs, save_log
 from coop_pipeline.agents import group_output_text
 from coop_pipeline.tagging import tag_log
 from coop_pipeline.scoring import attach_scores
@@ -207,9 +213,10 @@ log = json.load(open(f"{DATA_DIR}/raw/A1_simple_meeting_명시_1.json", encoding
 scenario = load_scenario("scenarios/A1/A1_simple_meeting_room.json")
 
 log = tag_log(log, api_key=API_KEYS["anthropic"])
-solo = run_solo_batch(scenario, API_KEYS, n_reps=5)
+saved = load_solo_outputs(DATA_DIR, "A1_simple_meeting_room", 1)   # 없으면 run_solo_batch()로 생성
 group_text = group_output_text(log)
-s = score_outputs(scenario, solo, group_text, API_KEYS["anthropic"])
+s = score_outputs(scenario, saved["outputs"], group_text, API_KEYS["anthropic"],
+                  solo_values=saved["solo_values"])
 log["group_output_text"] = group_text
 log = attach_scores(log, s["solo_values"], s["group_value"], s["new_idea_flag"])
 save_log(log, DATA_DIR)

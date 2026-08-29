@@ -257,6 +257,15 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
         step(f"단독 조건 실행 ({len(SOLO_AGENTS)} 에이전트 x {n_solo}회)")
         solo_outputs = run_solo_batch(scenario, api_keys, n_reps=n_solo)
 
+    # 1-1) 단독 산출물 저장 (체크포인트)
+    # 로그에는 점수(solo_scores/solo_grades)만 남고 원문은 남지 않는다. 원문이
+    # 사라지면 인간 채점자가 나중에 Q3(집단 우위)·Q4b(신규성)를 검증할 비교
+    # 대상이 없다. 대화를 돌리기 전에 원문부터 저장하고, 채점이 끝나면
+    # solo_values를 채워 같은 파일에 다시 저장한다.
+    if out_dir:
+        save_solo_outputs(solo_outputs, out_dir, replicate,
+                          solo_values=solo_values)
+
     # 2) 2-agent 대화
     step(f"2-agent 대화 실행 ({max_turns}턴)")
     log = run_dyad(
@@ -294,6 +303,10 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
 
     if out_dir:
         result["log_path"] = save_log(log, out_dir)
+        # 채점값을 포함해 다시 저장한다 (solo_values[i]는 outputs[i]의 점수)
+        result["solo_path"] = save_solo_outputs(
+            solo_outputs, out_dir, replicate,
+            solo_values=scores["solo_values"])
 
     if verbose:
         print(format_result(result))
@@ -336,6 +349,59 @@ def save_log(log: dict, out_dir) -> str:
     path = out_dir / name
     path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
+
+
+def save_solo_outputs(solo_outputs: list, out_dir, replicate: int = 1,
+                      solo_values: list = None) -> str:
+    """
+    단독 산출물 원문을 {out_dir}/solo/{scenario_id}_solo_{rep}.json 으로 저장한다.
+
+    로그(save_log)에는 단독 조건의 점수만 남고 원문은 남지 않는다. 인간 채점자가
+    Q3(집단 우위)·Q4b(신규성)를 검증하려면 그룹 산출물과 비교할 단독 원문이
+    필요하므로 별도 파일로 남긴다. solo/ 하위에 두는 이유: 완성 로그와 파일명
+    규칙이 달라서, 현황 셀과 classify_saved_dir()가 루트의 *.json을 훑을 때
+    걸리지 않게 하기 위해서다.
+
+    rep는 dyad의 replicate 번호다 (명시/묵시가 같은 단독 산출물을 공유하므로
+    조건 구분은 없다). solo_values를 주면 함께 저장한다 — solo_values[i]는
+    outputs[i]의 점수다 (score_outputs가 순서를 보존한다).
+    """
+    if not solo_outputs:
+        raise PipelineError("단독 산출물이 비어 있음 — 저장할 것이 없다")
+
+    out_dir = Path(out_dir) / "solo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    first = solo_outputs[0]
+    record = {
+        "scenario_id": first["scenario_id"],
+        "task_type": first["task_type"],
+        "condition": "solo",
+        "replicate": replicate,
+        "outputs": solo_outputs,
+        "solo_values": list(solo_values) if solo_values is not None else None,
+    }
+    path = out_dir / f"{first['scenario_id']}_solo_{replicate}.json"
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    return str(path)
+
+
+def load_solo_outputs(out_dir, scenario_id: str, replicate: int = 1) -> dict:
+    """
+    save_solo_outputs()로 저장한 단독 산출물을 읽는다.
+
+    반환 딕셔너리의 'outputs'와 'solo_values'를 run_scenario(solo_outputs=...,
+    solo_values=...)에 그대로 넘기면 단독 실행과 채점을 재사용할 수 있다
+    (중간에 실패한 조건을 이어서 돌릴 때 단독 10회 + judge 10회가 절약된다).
+    """
+    path = Path(out_dir) / "solo" / f"{scenario_id}_solo_{replicate}.json"
+    if not path.exists():
+        raise PipelineError(
+            f"저장된 단독 산출물이 없음: {path}\n"
+            f"  이 파일은 저장 기능 추가 이후의 실행에서만 만들어진다 — "
+            f"없으면 run_solo_batch()로 다시 생성할 것"
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def classify_saved_log(path, thresholds: dict = THRESHOLDS, verbose: bool = True) -> dict:
