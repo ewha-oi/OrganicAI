@@ -53,6 +53,25 @@ SYSTEM_PROMPT_TEMPLATES = {
             + _TURN_STYLE,
 }
 
+# A1은 양쪽이 서로 다른 사실을 가진 정보통합 과제다. 아래 순서를 명시하지 않으면
+# '자료를 달라'는 요청만 서로 반복해도 ref가 붙어 협력처럼 보이는 조용한 실패가 난다.
+# A2/A4에는 적용하지 않는다. 이 유형들은 같은 지문을 공유하거나, 정보 교환보다
+# 의견 조율·공동 생성 자체가 과제이기 때문이다.
+_A1_EXCHANGE_PROTOCOL = (
+    "\n\n[A1 정보 교환 규칙] 너는 네 지문에 적힌 사실과 ID만 알고 있다. "
+    "첫 발화에서 네가 가진 핵심 사실·ID·후보를 구체적으로 공유하라. "
+    "상대가 공유한 사실·ID를 다음 발화에서 명시적으로 확인하고 반영한 뒤에만 "
+    "최종 결론을 확정하라. 지문 밖의 자료를 반복해서 요구하거나 추측으로 채우지 말고, "
+    "두 사람이 이미 공유한 정보만으로 판단하라."
+)
+
+
+def _apply_task_protocol(task: str, task_type: str) -> str:
+    """과제 유형별로 필요한 대화 규칙만 덧붙인다."""
+    if task_type == "A1":
+        return task + _A1_EXCHANGE_PROTOCOL
+    return task
+
 # 대화 후 최종 산출물을 뽑아내는 마무리 프롬프트.
 # 이것이 없으면 "무엇을 채점할 것인가"가 정의되지 않는다.
 FINALIZE_PROMPT = (
@@ -370,6 +389,8 @@ def run_dyad(scenario: dict, condition: str, gemini_api_key: str, groq_api_key: 
     groq_client = _groq_client(groq_api_key)
 
     alpha_task, beta_task = _resolve_tasks(scenario)
+    alpha_task = _apply_task_protocol(alpha_task, scenario["task_type"])
+    beta_task = _apply_task_protocol(beta_task, scenario["task_type"])
     alpha_system = SYSTEM_PROMPT_TEMPLATES[condition].format(
         name="alpha", partner="beta", task=alpha_task)
     beta_system = SYSTEM_PROMPT_TEMPLATES[condition].format(
