@@ -339,8 +339,9 @@ def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
 def test_new_idea_prompt_is_bounded_but_keeps_each_output_ends(monkeypatch):
     captured = {}
 
-    def fake_call(_client, system, user, max_tokens):
-        captured.update(system=system, user=user, max_tokens=max_tokens)
+    def fake_call(_client, system, user, max_tokens, min_output_tokens=None):
+        captured.update(system=system, user=user, max_tokens=max_tokens,
+                        min_output_tokens=min_output_tokens)
         return {"new_idea": False, "reason": ""}
 
     monkeypatch.setattr(scoring, "make_judge", lambda *args, **kwargs: object())

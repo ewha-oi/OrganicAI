@@ -197,6 +197,22 @@ _MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 512))
 # 512 -> 256으로 한 번 낮춘다. 정상 요청의 출력 품질과 기존 실험 설정은 유지한다.
 _MIN_GROQ_JUDGE_TOKENS = 256
 
+# 호출 종류별 출력 하한.
+#
+# 예약량은 실제 사용량과 무관하게 TPD에 전액 청구된다. 그래서 '이 응답이 실제로
+# 얼마나 긴가'에 맞춰 하한을 나눠야 한다. 재는 대상은 그대로 두고 낭비만 줄인다.
+#
+#   태깅  : {"codes":[...], "reference":..., "evidence":{"코드":"원문 인용"}}
+#           evidence가 원문을 그대로 인용하므로 길다. 512 유지.
+#   채점  : {"grade": 4, "reason": "..."}                    실측 60~120토큰
+#   신규성: {"new_idea": true, "reason": "..."}               실측 60~120토큰
+#
+# 뒤 둘을 256으로 낮추면 건당 judge 호출 14회 x 256토큰이 절약된다.
+# 낮춰서 잘리면 조용히 틀리지 않고 "응답을 JSON으로 해석할 수 없음"으로 드러나므로,
+# 그 에러가 반복되면 이 값을 되돌린다.
+JUDGE_TAGGING_MIN_TOKENS = _MIN_OUTPUT_TOKENS
+JUDGE_SHORT_JSON_MIN_TOKENS = int(os.environ.get("COOP_JUDGE_SHORT_MAX_TOKENS", 256))
+
 # reasoning_effort를 받는 Groq 모델과, 그 모델이 받아들이는 값.
 # **값이 계열마다 다르다.** 틀린 값을 보내면 400이므로 하나로 뭉뚱그릴 수 없다.
 #     gpt-oss : low / medium / high
@@ -223,8 +239,13 @@ class JudgeClient:
         return f"<JudgeClient {self.provider}:{self.model}>"
 
     def json(self, system: str, user: str, max_tokens: int = 400,
-             model: str = None) -> dict:
+             model: str = None, min_output_tokens: int = None) -> dict:
+        """
+        min_output_tokens: 이 호출 종류의 출력 하한. 짧은 JSON만 받는 호출
+            (채점 · 신규성)은 256을 주면 예약 낭비를 줄인다. 생략하면 512.
+        """
         model_id = model or self.model
+        floor = _MIN_OUTPUT_TOKENS if min_output_tokens is None else min_output_tokens
         caller = {
             "anthropic": self._call_anthropic,
             "groq": self._call_groq,
@@ -232,9 +253,10 @@ class JudgeClient:
         }[self.provider]
 
         def _once():
-            return parse_json_strict(caller(system, user, max_tokens, model_id))
+            return parse_json_strict(
+                caller(system, user, max_tokens, model_id, floor))
 
-        output_budget = max(max_tokens, _MIN_OUTPUT_TOKENS)
+        output_budget = max(max_tokens, floor)
         details = (
             f"judge 호출({self.provider}:{model_id}; system={len(system)}자, "
             f"user={len(user)}자, output={output_budget})"
@@ -242,18 +264,18 @@ class JudgeClient:
         return with_retry(_once, what=details)
 
     # -- 제공사별 구현 -------------------------------------------------------
-    def _call_anthropic(self, system, user, max_tokens, model_id):
+    def _call_anthropic(self, system, user, max_tokens, model_id, floor):
         response = self.client.messages.create(
-            model=model_id, max_tokens=max_tokens, temperature=0,
+            model=model_id, max_tokens=max(max_tokens, floor), temperature=0,
             system=system, messages=[{"role": "user", "content": user}],
         )
         return response.content[0].text
 
-    def _call_groq(self, system, user, max_tokens, model_id):
+    def _call_groq(self, system, user, max_tokens, model_id, floor):
         # OpenAI 호환 인터페이스. response_format으로 JSON을 강제한다
         # (프롬프트에 'JSON'이라는 단어가 있어야 이 옵션이 동작한다 —
         #  CODING_MANUAL / JUDGE_RUBRIC 모두 조건을 만족한다).
-        budget = max(max_tokens, _MIN_OUTPUT_TOKENS)
+        budget = max(max_tokens, floor)
         min_budget = min(budget, _MIN_GROQ_JUDGE_TOKENS)
         while True:
             kwargs = dict(
@@ -292,13 +314,13 @@ class JudgeClient:
             )
         return content
 
-    def _call_gemini(self, system, user, max_tokens, model_id):
+    def _call_gemini(self, system, user, max_tokens, model_id, floor):
         model = self.client.GenerativeModel(model_id, system_instruction=system)
         response = model.generate_content(
             user,
             generation_config={
                 "temperature": 0,
-                "max_output_tokens": max(max_tokens, _MIN_OUTPUT_TOKENS),
+                "max_output_tokens": max(max_tokens, floor),
                 "response_mime_type": "application/json",
             },
         )
@@ -333,6 +355,8 @@ def make_judge(api_key: str, provider: str = None, model: str = None) -> JudgeCl
 
 
 def call_judge_json(judge: JudgeClient, system: str, user: str,
-                    max_tokens: int = 400, model: str = None) -> dict:
+                    max_tokens: int = 400, model: str = None,
+                    min_output_tokens: int = None) -> dict:
     """JudgeClient.json()의 함수형 별칭 (기존 호출부 호환용)."""
-    return judge.json(system, user, max_tokens=max_tokens, model=model)
+    return judge.json(system, user, max_tokens=max_tokens, model=model,
+                      min_output_tokens=min_output_tokens)

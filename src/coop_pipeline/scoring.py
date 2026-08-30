@@ -15,7 +15,7 @@ import os
 import re
 import unicodedata
 
-from .llm import call_judge_json, make_judge
+from .llm import JUDGE_SHORT_JSON_MIN_TOKENS, call_judge_json, make_judge
 
 # judge SDK(anthropic/groq/google-generativeai)는 실제로 호출할 때만 필요하다.
 # A1 채점(score_a1)과 정규화는 API 호출이 없으므로, SDK가 설치되지 않은
@@ -28,7 +28,18 @@ from .llm import call_judge_json, make_judge
 # 정규화에서 제거할 문자: 공백, 구두점, 기호.
 # "19:00" -> "1900", "panel-3" -> "panel3", "B 실" -> "b실" 처럼 만들어
 # 표기 흔들림 때문에 정답을 놓치는 위양성(false negative)을 줄인다.
-_STRIP_CHARS = re.compile(r"[\s​·,./\\|~!@#$%^&*()\[\]{}<>\"'`:;?_+=\-–—]+")
+#
+# 대시류는 **유니코드 대시를 전부** 넣어야 한다. NFKC는 전각 대시(U+FF0D)만
+# 하이픈-마이너스로 바꾸고, U+2011(NON-BREAKING HYPHEN)은 U+2010(HYPHEN)으로
+# 옮길 뿐 U+002D로 만들지 않는다. 그래서 목록에 '-–—'만 있으면
+#     체크리스트 "panel-3" -> "panel3"
+#     산출물     "panel‑3" -> "panel‐3"      (U+2011 -> U+2010 이 살아남는다)
+# 가 되어 **영원히 불일치**한다. rep=1 수집에서 실제로 발생했다:
+# alpha(gpt-oss-120b)가 U+2011을 습관적으로 써서 A1_complex_power_outage의
+# 'panel-3' 항목이 그룹·단독 양쪽에서 항상 0점이었고, 그 시나리오의 만점이
+# 구조적으로 6/7=0.857로 막혀 있었다.
+_DASHES = "\\-­‐-―⁃−﹘﹣－"
+_STRIP_CHARS = re.compile(r"[\s​·,./\\|~!@#$%^&*()\[\]{}<>\"'`:;?_+=" + _DASHES + "]+")
 
 
 def normalize(text) -> str:
@@ -200,6 +211,7 @@ def score_a2_a4_detail(output_text: str, api_key: str, task_type: str,
         system=judge_rubric(task_type),
         user=f"산출물:\n{anonymize_output(output_text)}",
         max_tokens=300,
+        min_output_tokens=JUDGE_SHORT_JSON_MIN_TOKENS,
     )
     grade = int(parsed["grade"])
     if not 1 <= grade <= 5:
@@ -277,6 +289,7 @@ def detect_new_idea_detail(solo_outputs: list, group_output: str, api_key: str,
         system=NEW_IDEA_PROMPT,
         user=prompt,
         max_tokens=300,
+        min_output_tokens=JUDGE_SHORT_JSON_MIN_TOKENS,
     )
     return {"new_idea": bool(parsed["new_idea"]), "reason": parsed.get("reason", "")}
 
@@ -285,10 +298,18 @@ def detect_new_idea_detail(solo_outputs: list, group_output: str, api_key: str,
 # 로그에 채점 결과 붙이기
 # ---------------------------------------------------------------------------
 def attach_scores(log: dict, solo_scores_or_grades: list, group_score_or_grade,
-                  new_idea_flag: bool) -> dict:
+                  new_idea_flag: bool, reasons: dict = None) -> dict:
     """
     채점 결과를 로그 딕셔너리에 붙여서 반환한다.
     validate_log() 스펙에 맞춰 task_type에 따라 필드명을 다르게 넣는다.
+
+    reasons: judge가 쓴 근거. {"group": str, "solo": [str, ...], "new_idea": str}
+        docs/RUBRIC.md §4-4가 "reason을 반드시 남길 것"이라고 요구한다.
+        등급만 남기면 인간 채점자와 갈렸을 때 왜 갈렸는지 알 수 없고,
+        §6-6의 '채점 일치도'를 계산할 근거 자료가 사라진다.
+        judge는 이미 reason을 써서 보내므로 **저장에 추가 비용이 0이다.**
+        (rep=1 수집에서는 이 값을 받아 놓고 버렸다. 병목의 3분의 2가 Q3였는데
+         왜 그 등급이 나왔는지 확인할 자료가 로그에 하나도 없다.)
     """
     if not solo_scores_or_grades:
         raise ValueError(
@@ -302,4 +323,12 @@ def attach_scores(log: dict, solo_scores_or_grades: list, group_score_or_grade,
         log["solo_grades"] = list(solo_scores_or_grades)
         log["group_grade"] = group_score_or_grade
     log["new_idea_flag"] = bool(new_idea_flag)
+
+    reasons = reasons or {}
+    log["new_idea_reason"] = reasons.get("new_idea", "")
+    # A1은 코드로 채점하므로 judge 근거가 없다. 빈 값을 넣어 두면 "judge가
+    # 근거를 안 줬다"와 "애초에 judge를 안 썼다"가 구별되지 않으므로 넣지 않는다.
+    if log["task_type"] != "A1":
+        log["group_grade_reason"] = reasons.get("group", "")
+        log["solo_grade_reasons"] = list(reasons.get("solo") or [])
     return log
