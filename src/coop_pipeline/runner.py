@@ -51,13 +51,19 @@
     print(result["level"])
 """
 
+import hashlib
 import json
 from pathlib import Path
 
 from .agents import group_output_text, run_dyad, run_solo
 from .classify import classify_log, format_result, min_turns_for_bidirectional
 from .llm import judge_key_name, judge_model, judge_provider
-from .scoring import attach_scores, detect_new_idea, score_a1, score_a2_a4
+from .scoring import (
+    attach_scores,
+    detect_new_idea_detail,
+    score_a1,
+    score_a2_a4_detail,
+)
 from .tagging import tag_log
 from .thresholds import THRESHOLDS
 
@@ -175,7 +181,8 @@ def judge_key(api_keys: dict) -> str:
 
 
 def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
-                  judge_api_key: str, solo_values: list = None) -> dict:
+                  judge_api_key: str, solo_values: list = None,
+                  solo_reasons: list = None) -> dict:
     """
     단독/그룹 산출물을 채점한다.
     A1  : scoring.checklist 기반 결정론 채점 (API 호출 없음)
@@ -187,6 +194,10 @@ def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
         명시/묵시는 같은 단독 산출물을 공유하는데, 조건마다 다시 채점하면
         (1) judge 호출을 10회씩 두 번 내고 (2) 같은 글에 다른 등급이 나와
         두 조건의 기준선이 어긋난다. 한 번 채점해 양쪽이 그대로 쓰는 것이 맞다.
+    solo_reasons: solo_values와 짝을 이루는 judge 근거. 함께 넘겨야 재사용한
+        점수의 근거가 뒤 조건 로그에도 남는다.
+
+    반환값에는 judge가 쓴 근거가 함께 들어온다 (docs/RUBRIC.md §4-4).
     """
     task_type = scenario["task_type"]
     solo_texts = [o["output"] for o in solo_outputs]
@@ -195,16 +206,29 @@ def score_outputs(scenario: dict, solo_outputs: list, group_text: str,
         checklist = scenario["scoring"]["checklist"]
         if solo_values is None:
             solo_values = [score_a1(text, checklist) for text in solo_texts]
-        group_value = score_a1(group_text, checklist)
+            solo_reasons = []          # 코드 채점이라 judge 근거가 없다
+        group_value, group_reason = score_a1(group_text, checklist), ""
     else:
         if solo_values is None:
-            solo_values = [score_a2_a4(text, judge_api_key, task_type)
-                           for text in solo_texts]
-        group_value = score_a2_a4(group_text, judge_api_key, task_type)
+            scored = [score_a2_a4_detail(text, judge_api_key, task_type)
+                      for text in solo_texts]
+            solo_values = [s["grade"] for s in scored]
+            solo_reasons = [s["reason"] for s in scored]
+        graded = score_a2_a4_detail(group_text, judge_api_key, task_type)
+        group_value, group_reason = graded["grade"], graded["reason"]
 
-    new_idea = detect_new_idea(solo_texts, group_text, judge_api_key)
-    return {"solo_values": solo_values, "group_value": group_value,
-            "new_idea_flag": new_idea}
+    new_idea = detect_new_idea_detail(solo_texts, group_text, judge_api_key)
+    return {
+        "solo_values": solo_values,
+        "solo_reasons": list(solo_reasons or []),
+        "group_value": group_value,
+        "new_idea_flag": new_idea["new_idea"],
+        "reasons": {
+            "group": group_reason,
+            "solo": list(solo_reasons or []),
+            "new_idea": new_idea["reason"],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +238,8 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
                  replicate: int = 1, n_solo: int = DEFAULT_SOLO_REPS,
                  max_turns: int = 10, thresholds: dict = THRESHOLDS,
                  out_dir=None, solo_outputs: list = None,
-                 solo_values: list = None, verbose: bool = True) -> dict:
+                 solo_values: list = None, solo_reasons: list = None,
+                 solo_replicate: int = None, verbose: bool = True) -> dict:
     """
     시나리오 하나를 조건 하나로 끝까지 돌리고 판정 결과를 반환한다.
 
@@ -262,9 +287,15 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     # 사라지면 인간 채점자가 나중에 Q3(집단 우위)·Q4b(신규성)를 검증할 비교
     # 대상이 없다. 대화를 돌리기 전에 원문부터 저장하고, 채점이 끝나면
     # solo_values를 채워 같은 파일에 다시 저장한다.
+    #
+    # 파일명의 rep은 '이 단독 산출물이 처음 만들어진 rep'이다. dyad의 rep이 아니다.
+    # 재사용할 때 dyad의 rep을 쓰면 같은 산출물이 rep마다 사본으로 늘어나고,
+    # 인간 채점자가 어느 것이 기준선인지 알 수 없게 된다. 시나리오당 하나여야 한다.
+    solo_rep = replicate if solo_replicate is None else solo_replicate
     if out_dir:
-        save_solo_outputs(solo_outputs, out_dir, replicate,
-                          solo_values=solo_values)
+        save_solo_outputs(solo_outputs, out_dir, solo_rep,
+                          solo_values=solo_values, solo_reasons=solo_reasons,
+                          solo_task=scenario["task_variants"]["solo"])
 
     # 2) 2-agent 대화
     step(f"2-agent 대화 실행 ({max_turns}턴)")
@@ -288,10 +319,10 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     step("채점")
     group_text = group_output_text(log)
     scores = score_outputs(scenario, solo_outputs, group_text, jkey,
-                           solo_values=solo_values)
+                           solo_values=solo_values, solo_reasons=solo_reasons)
     log["group_output_text"] = group_text
     log = attach_scores(log, scores["solo_values"], scores["group_value"],
-                        scores["new_idea_flag"])
+                        scores["new_idea_flag"], reasons=scores["reasons"])
 
     # 6~7) 검증 + 판정
     step("판정")
@@ -300,13 +331,16 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     result["solo_outputs"] = solo_outputs
     # 다음 조건이 그대로 재사용한다 (judge 호출 10회 절약 + 기준선 일치)
     result["solo_values"] = scores["solo_values"]
+    result["solo_reasons"] = scores["solo_reasons"]
 
     if out_dir:
         result["log_path"] = save_log(log, out_dir)
-        # 채점값을 포함해 다시 저장한다 (solo_values[i]는 outputs[i]의 점수)
+        # 채점값을 포함해 같은 파일에 다시 저장한다 (solo_values[i]는 outputs[i]의 점수)
         result["solo_path"] = save_solo_outputs(
-            solo_outputs, out_dir, replicate,
-            solo_values=scores["solo_values"])
+            solo_outputs, out_dir, solo_rep,
+            solo_values=scores["solo_values"],
+            solo_reasons=scores["solo_reasons"],
+            solo_task=scenario["task_variants"]["solo"])
 
     if verbose:
         print(format_result(result))
@@ -314,24 +348,55 @@ def run_scenario(scenario_path, condition: str, api_keys: dict,
     return result
 
 
-def run_scenario_both_conditions(scenario_path, api_keys: dict, **kwargs) -> dict:
+def run_scenario_both_conditions(scenario_path, api_keys: dict,
+                                 reuse_solo: bool = True, **kwargs) -> dict:
     """
     같은 시나리오를 명시/묵시 두 조건으로 돌린다.
 
     단독 산출물은 한 번만 생성하고, **채점 결과도 한 번만 내서** 두 조건이 공유한다.
     조건마다 다시 채점하면 judge 호출을 10회씩 두 번 내는 데다, 같은 글에 다른
     등급이 나와 "두 조건이 같은 기준선을 쓴다"는 전제가 실제로는 깨진다.
+
+    reuse_solo=True (기본): out_dir에 같은 시나리오의 단독 산출물이 이미 있으면
+        **rep을 넘어서 그대로 쓴다.** 근거는 find_reusable_solo() 참고 —
+        비용이 3분의 1로 줄고, Q3의 기준선이 rep 사이에 고정돼 더 정확해진다.
+        rep마다 새로 뽑고 싶으면 False를 준다.
     """
     scenario = load_scenario(scenario_path)
     n_solo = kwargs.pop("n_solo", DEFAULT_SOLO_REPS)
-    solo_outputs = run_solo_batch(scenario, api_keys, n_reps=n_solo)
+    out_dir = kwargs.get("out_dir")
+    verbose = kwargs.get("verbose", True)
 
-    results, solo_values = {}, kwargs.pop("solo_values", None)
+    solo_outputs = kwargs.pop("solo_outputs", None)
+    solo_values = kwargs.pop("solo_values", None)
+    solo_reasons = kwargs.pop("solo_reasons", None)
+    solo_replicate = kwargs.pop("solo_replicate", None)
+
+    if solo_outputs is None and reuse_solo and out_dir:
+        cached = find_reusable_solo(out_dir, scenario, n_solo)
+        if cached:
+            solo_outputs = cached["outputs"]
+            solo_values = cached["solo_values"]
+            solo_reasons = cached.get("solo_reasons")
+            solo_replicate = cached.get("replicate")
+            if verbose:
+                print(f"[{scenario['scenario_id']}] 단독 산출물 재사용 "
+                      f"({len(solo_outputs)}개, {Path(cached['path']).name}) "
+                      f"— 생성 {len(solo_outputs)}회 + judge {len(solo_outputs)}회 절약")
+
+    if solo_outputs is None:
+        solo_outputs = run_solo_batch(scenario, api_keys, n_reps=n_solo)
+
+    results = {}
     for cond in ("명시", "묵시"):
         results[cond] = run_scenario(scenario_path, cond, api_keys,
                                      solo_outputs=solo_outputs,
-                                     solo_values=solo_values, **kwargs)
-        solo_values = results[cond]["solo_values"]   # 뒤 조건은 재채점하지 않는다
+                                     solo_values=solo_values,
+                                     solo_reasons=solo_reasons,
+                                     solo_replicate=solo_replicate, **kwargs)
+        # 뒤 조건은 재채점하지 않는다 (기준선 일치 + judge 10회 절약)
+        solo_values = results[cond]["solo_values"]
+        solo_reasons = results[cond]["solo_reasons"]
     return results
 
 
@@ -351,8 +416,16 @@ def save_log(log: dict, out_dir) -> str:
     return str(path)
 
 
+def solo_task_fingerprint(solo_task: str) -> str:
+    """단독 지문의 지문(fingerprint). 재사용 가능 여부를 판단하는 열쇠다."""
+    if solo_task is None:
+        return ""
+    return hashlib.sha1(str(solo_task).encode("utf-8")).hexdigest()[:16]
+
+
 def save_solo_outputs(solo_outputs: list, out_dir, replicate: int = 1,
-                      solo_values: list = None) -> str:
+                      solo_values: list = None, solo_reasons: list = None,
+                      solo_task: str = None) -> str:
     """
     단독 산출물 원문을 {out_dir}/solo/{scenario_id}_solo_{rep}.json 으로 저장한다.
 
@@ -377,8 +450,13 @@ def save_solo_outputs(solo_outputs: list, out_dir, replicate: int = 1,
         "task_type": first["task_type"],
         "condition": "solo",
         "replicate": replicate,
+        # 어떤 지문으로 만든 산출물인지. 시나리오의 solo 지문이 바뀌면 이 값이
+        # 달라져 재사용이 자동으로 막힌다 (옛 지문의 산출물을 새 지문의
+        # 기준선으로 쓰는 것이 가장 조용하고 위험한 오염이다).
+        "solo_task_sha1": solo_task_fingerprint(solo_task),
         "outputs": solo_outputs,
         "solo_values": list(solo_values) if solo_values is not None else None,
+        "solo_reasons": list(solo_reasons) if solo_reasons is not None else None,
     }
     path = out_dir / f"{first['scenario_id']}_solo_{replicate}.json"
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2),
@@ -402,6 +480,63 @@ def load_solo_outputs(out_dir, scenario_id: str, replicate: int = 1) -> dict:
             f"없으면 run_solo_batch()로 다시 생성할 것"
         )
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def find_reusable_solo(out_dir, scenario: dict, n_solo: int) -> dict:
+    """
+    이 시나리오로 이미 만들어 둔 단독 산출물을 찾는다. 없으면 None.
+
+    **rep을 넘어서 재사용한다.** 단독 조건은 시나리오의 성질이지 rep의 성질이
+    아니다. 지금 코드는 rep마다 단독 10개를 새로 만들고 새로 채점했는데,
+    그 10개를 rep 사이에 **모으지 않고 갈아치우기만** 했다. 그래서 비용만 3배로
+    나가고 표본은 여전히 10개였다. 재사용하면
+      - judge 호출 10회 x (rep 2, 3) = 시나리오당 20회 절약
+      - 생성 호출 10회 x (rep 2, 3) = 시나리오당 20회 절약
+      - Q3의 기준선(solo_p90 / solo_median_grade)이 rep 사이에 **고정**된다.
+        지금은 rep마다 기준선이 흔들려서, 그 흔들림이 조건 효과와 구별되지 않는다.
+    즉 싸지는 동시에 더 정확해진다.
+
+    재사용을 막는 조건 (하나라도 걸리면 None):
+      - 채점값이 없다 (체크포인트만 저장된 상태)
+      - 산출물 개수가 지금 n_solo와 다르다
+      - 단독 지문이 그때와 다르다 (solo_task_sha1 불일치)
+    """
+    solo_dir = Path(out_dir) / "solo"
+    if not solo_dir.is_dir():
+        return None
+
+    scenario_id = scenario["scenario_id"]
+    want_n = n_solo * len(SOLO_AGENTS)
+    want_fingerprint = solo_task_fingerprint(scenario["task_variants"]["solo"])
+
+    # rep 번호가 낮은 것부터 본다 — 가장 먼저 만든 것을 기준선으로 고정한다.
+    # (문자열 정렬이면 _solo_10 이 _solo_2 보다 앞에 온다. 숫자로 정렬한다.)
+    def rep_order(p):
+        tail = p.stem.rsplit("_", 1)[-1]
+        return (0, int(tail)) if tail.isdigit() else (1, 0)
+
+    for path in sorted(solo_dir.glob(f"{scenario_id}_solo*.json"), key=rep_order):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if record.get("scenario_id") != scenario_id:
+            continue
+        if not record.get("solo_values"):
+            continue
+        if len(record.get("outputs") or []) != want_n:
+            continue
+        if len(record["solo_values"]) != want_n:
+            continue
+        # 지문 해시가 없는 것은 이 기능 이전에 저장된 파일이다. 그때의 산출물은
+        # 출력 예산 1024로 잘렸을 수 있으므로 재사용하지 않는다.
+        if record.get("solo_task_sha1") != want_fingerprint:
+            continue
+
+        record["path"] = str(path)
+        return record
+    return None
 
 
 def classify_saved_log(path, thresholds: dict = THRESHOLDS, verbose: bool = True) -> dict:

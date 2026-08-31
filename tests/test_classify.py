@@ -157,6 +157,17 @@ def test_raw_log_passes_when_tags_not_required():
     validate_log(log, require_tags=False)  # 예외가 나지 않아야 한다
 
 
+def test_a1_exchange_protocol_is_applied_only_to_a1():
+    task = "개별 과제 지문"
+    a1 = agents._apply_task_protocol(task, "A1")
+
+    assert task in a1
+    assert "첫 발화에서" in a1
+    assert "상대가 공유한 사실·ID" in a1
+    assert agents._apply_task_protocol(task, "A2") == task
+    assert agents._apply_task_protocol(task, "A4") == task
+
+
 def test_self_reference_is_rejected():
     log = make_base_log(turns=[
         {"turn": 1, "speaker": "alpha", "text": "...", "codes": [], "ref": "alpha"},
@@ -339,8 +350,9 @@ def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
 def test_new_idea_prompt_is_bounded_but_keeps_each_output_ends(monkeypatch):
     captured = {}
 
-    def fake_call(_client, system, user, max_tokens):
-        captured.update(system=system, user=user, max_tokens=max_tokens)
+    def fake_call(_client, system, user, max_tokens, min_output_tokens=None):
+        captured.update(system=system, user=user, max_tokens=max_tokens,
+                        min_output_tokens=min_output_tokens)
         return {"new_idea": False, "reason": ""}
 
     monkeypatch.setattr(scoring, "make_judge", lambda *args, **kwargs: object())
