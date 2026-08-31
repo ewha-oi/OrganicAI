@@ -331,6 +331,54 @@ def test_judge_stops_after_its_single_budget_fallback():
     assert [call["max_tokens"] for call in completions.calls] == [512, 256]
 
 
+class _JsonModeFailure(Exception):
+    """Groq가 json_object 모드에서 유효한 JSON을 못 받았을 때의 400."""
+
+    status_code = 400
+    body = {"error": {"message": "Failed to generate JSON. Please adjust your prompt.",
+                      "failed_generation": '{"codes": ["arch"], "evidence": {"arch": "D14'}}
+
+    def __str__(self):
+        return "Error code: 400 - Failed to generate JSON. Please adjust your prompt."
+
+
+def test_groq_judge_raises_budget_then_drops_json_mode(monkeypatch):
+    """잘림(예산)과 군말(형식) 중 어느 쪽인지 모르므로 순서대로 둘 다 시도한다."""
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if "response_format" in kwargs:
+                raise _JsonModeFailure()
+            return _Completion()   # JSON 모드를 끄니 문자열이 그대로 온다
+
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": Completions()})()})()
+    judge = llm.JudgeClient("groq", client, "qwen/qwen3.6-27b")
+
+    assert judge.json("system", "user") == {"codes": [], "reference": None, "evidence": {}}
+    assert [c["max_tokens"] for c in calls] == [512, 1024, 1024]
+    assert [("response_format" in c) for c in calls] == [True, True, False]
+
+
+def test_json_mode_failure_is_not_retried_and_keeps_failed_generation():
+    """확정적 실패다. 3회 재시도하면 TPD만 3배로 나간다."""
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            raise _JsonModeFailure()
+
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": Completions()})()})()
+    judge = llm.JudgeClient("groq", client, "qwen/qwen3.6-27b")
+
+    with pytest.raises(llm.LLMCallError, match="D14"):
+        judge.json("system", "user")
+    # 512 -> 1024 -> json_mode 해제. 그 뒤로는 재시도하지 않는다.
+    assert len(calls) == 3
+
+
 def test_beta_call_has_bounded_output_and_gpt_reasoning(monkeypatch):
     calls = []
 
