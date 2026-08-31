@@ -119,6 +119,38 @@ def _is_daily_token_limit(exc: Exception) -> bool:
     return "tokens per day" in str(exc).lower()
 
 
+def _is_json_mode_failure(exc: Exception) -> bool:
+    """
+    Groq의 response_format={"type":"json_object"}가 유효한 JSON을 받지 못했을 때의 400.
+
+    다른 제공사라면 잘린 문자열이 그대로 와서 parse_json_strict가 "응답을 JSON으로
+    해석할 수 없음"을 냈을 상황인데, Groq는 그 전에 400으로 막는다. 그래서
+    _MIN_OUTPUT_TOKENS 주석이 적어 둔 '되돌림 신호'가 이 얼굴로 나타난다.
+
+    413과 같은 이유로 원인 체인을 따라간다 — _call_groq이 실패한 출력 원문을 붙여
+    LLMCallError로 감싸는데, 겉면만 보면 with_retry가 못 알아보고 3회 재시도한다.
+    """
+    current = exc
+    while current is not None:
+        if "failed to generate json" in str(current).lower():
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _failed_generation(exc: Exception) -> str:
+    """
+    Groq가 400 본문에 함께 주는 실패한 출력 원문. 원인 판별에 이것만 있으면 된다.
+    JSON이 중간에서 끊겼으면 절단, 앞에 설명이나 <think>가 붙었으면 군말이다.
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            return str(error.get("failed_generation", ""))
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # JSON 파싱
 # ---------------------------------------------------------------------------
@@ -166,6 +198,11 @@ def with_retry(fn, what: str = "LLM 호출"):
                 raise LLMCallError(f"{what}: 요청이 모델 한도를 넘음: {exc}") from exc
             if _is_daily_token_limit(exc):
                 raise LLMCallError(f"{what}: 일일 토큰 한도(TPD)에 도달: {exc}") from exc
+            # temperature=0이라 같은 입력은 같은 출력을 낸다. _call_groq이 예산을
+            # 올리고 JSON 모드까지 껐는데도 여기 왔다면 재시도는 실패를 3배로
+            # 늘릴 뿐이다 (그만큼 TPD도 나간다).
+            if _is_json_mode_failure(exc):
+                raise LLMCallError(f"{what}: {exc}") from exc
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BASE_SLEEP * attempt)
     raise LLMCallError(f"{what} {MAX_RETRIES}회 모두 실패: {last_error}") from last_error
@@ -196,6 +233,11 @@ _MIN_OUTPUT_TOKENS = int(os.environ.get("COOP_JUDGE_MAX_TOKENS", 512))
 # JSON 태깅/채점은 매우 짧은 응답만 필요하다. 요청 전체가 TPM 한도를 넘을 때만
 # 512 -> 256으로 한 번 낮춘다. 정상 요청의 출력 품질과 기존 실험 설정은 유지한다.
 _MIN_GROQ_JUDGE_TOKENS = 256
+
+# JSON 모드가 실패했을 때만 한 번 올려 보는 예산. 하한 자체를 올리지 않는 이유는
+# 태깅 호출이 시나리오당 20회씩 나가서, 전부 두 배로 예약하면 TPD가 다시 빠듯해지기
+# 때문이다. 긴 발화 몇 개만 이 비용을 내면 된다.
+_GROQ_JSON_RETRY_TOKENS = 1024
 
 # 호출 종류별 출력 하한.
 #
@@ -277,14 +319,19 @@ class JudgeClient:
         #  CODING_MANUAL / JUDGE_RUBRIC 모두 조건을 만족한다).
         budget = max(max_tokens, floor)
         min_budget = min(budget, _MIN_GROQ_JUDGE_TOKENS)
+        json_mode = True
+        # 예산 상향은 한 번뿐이다. 올린 예산이 413을 맞으면 위 분기가 다시 예산을
+        # 낮추는데, 그때 또 올리면 두 분기가 서로를 되살려 루프가 끝나지 않는다.
+        budget_raised = False
         while True:
             kwargs = dict(
                 model=model_id, max_tokens=budget,
                 temperature=0,
-                response_format={"type": "json_object"},
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
             )
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
             for tag, effort in _GROQ_REASONING_EFFORT.items():
                 if tag in model_id:
                     kwargs["reasoning_effort"] = effort
@@ -301,6 +348,28 @@ class JudgeClient:
                         f"groq judge({model_id}) 요청이 여전히 너무 큼 "
                         f"(system={len(system)}자, user={len(user)}자, "
                         f"max_tokens={budget})"
+                    ) from exc
+                # JSON 모드 400. 원인이 둘인데 이 자리에서는 구별할 수 없으므로
+                # 둘 다에 순서대로 대응한다.
+                #   (1) 출력이 예산에서 끊긴 경우  -> 예산을 한 번 올린다
+                #   (2) 모델이 JSON 앞뒤에 군말을 붙인 경우 -> JSON 모드를 끄면
+                #       그 문자열이 그대로 오고, parse_json_strict가 펜스·설명이
+                #       붙은 응답에서 객체를 뽑아낸다
+                if _is_json_mode_failure(exc):
+                    if not budget_raised and budget < _GROQ_JSON_RETRY_TOKENS:
+                        budget = _GROQ_JSON_RETRY_TOKENS
+                        budget_raised = True
+                        continue
+                    if json_mode:
+                        json_mode = False
+                        continue
+                    # 여기까지 왔으면 예산 문제도 형식 문제도 아니다. 실패한 출력
+                    # 원문을 메시지 앞쪽에 실어 둔다 — 노트북 수집 루프가 에러를
+                    # 잘라서 찍으므로 뒤에 붙이면 잘려 나간다.
+                    raise LLMCallError(
+                        f"groq judge({model_id}) JSON 생성 실패 "
+                        f"[{_failed_generation(exc)[:200]}] "
+                        f"(max_tokens={budget}, json_mode 해제 후에도 실패)"
                     ) from exc
                 raise
 
